@@ -39,11 +39,11 @@ def display_upv_settings(upv):
 
     grouped_commands = {
         "🔧 Generator Config": {
-            "Generator Instrument"     : "SOUR:INP:SEL <type>",
-            "Generator Channel"        : "SOUR:CHAN?",
-            "Output Impedance"         : "OUTP:IMP:UNB?",
+            "Instrument"               : "SOUR:INP:SEL <type>",
+            "Channel"                  : "SOUR:CHAN?",
             "Output Type (Unbal/Bal)"  : "OUTP:TYPE",
-            "Generator Bandwidth"      : "SOUR:BAND?",
+            "Impedance"                : "OUTP:IMP:UNB?",
+            "Bandwidth"                : "SOUR:BAND?",
             "Generator Voltage Range"  : "SOUR:VOLT:RANG?",
         },
 
