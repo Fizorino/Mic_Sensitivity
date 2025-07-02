@@ -35,48 +35,55 @@ def load_config():
     return None
 
 def display_upv_settings(upv):
-    print("\n📋 UPV Configuration:\n")
+    print("\n📋 UPV Configuration:")
 
-    commands = {
-        # --- Generator Config ---
-        "Generator Instrument"     : "SOUR:INP:SEL?",         # Might return 'ANALOG'
-        "Generator Channel"        : "SOUR:CHAN?",            # May not apply directly
-        "Output Impedance"         : "OUTP:IMP?",             # e.g. 5 ohm
-        "Output Type (Unbal/Bal)"  : "OUTP:COUP?",            # May need interpretation
-        "Generator Bandwidth"      : "SOUR:BAND?",            # If supported
-        "Generator Voltage Range"  : "SOUR:VOLT:RANG?",       # Or SENS:RANG?
+    grouped_commands = {
+        "🔧 Generator Config": {
+            "Generator Instrument"     : "SOUR:INP:SEL?",
+            "Generator Channel"        : "SOUR:CHAN?",
+            "Output Impedance"         : "OUTP:IMP?",
+            "Output Type (Unbal/Bal)"  : "OUTP:COUP?",
+            "Generator Bandwidth"      : "SOUR:BAND?",
+            "Generator Voltage Range"  : "SOUR:VOLT:RANG?",
+        },
 
-        # --- Generator Function ---
-        "Waveform Function"        : "SOUR:FUNC:SHAP?",       # e.g. SINE
-        "Frequency"                : "SOUR:FREQ?",            # e.g. 1 kHz
-        "Sweep Mode"               : "SOUR:SWE:STAT?",        # ON/OFF
-        "Sweep Type"               : "SOUR:SWE:TYPE?",        # e.g. LIN
+        "🎵 Generator Function": {
+            "Waveform Function"        : "SOUR:FUNC:SHAP?",
+            "Frequency"                : "SOUR:FREQ?",
+            "Sweep Mode"               : "SOUR:SWE:STAT?",
+            "Sweep Type"               : "SOUR:SWE:TYPE?",
+        },
 
-        # --- Analyzer Config ---
-        "Analyzer Instrument"      : "CALC:INP:SEL?",         # e.g. ANALOG
-        "CH1 Coupling"             : "INP1:COUP?",
-        "CH1 Bandwidth"            : "INP1:BAND?",            # or LPAS?
-        "Pre Filter"               : "INP1:FILT?",            # Try filter settings
-        "CH1 Input Type"           : "INP1:TYPE?",            # e.g. BAL
-        "CH1 Impedance"            : "INP1:IMP?",
-        "CH1 Ground/Common"        : "INP1:COMM?",            # FLOAT/GND
+        "🎧 Analyzer Config": {
+            "Analyzer Instrument"      : "CALC:INP:SEL?",
+            "CH1 Coupling"             : "INP1:COUP?",
+            "CH1 Bandwidth"            : "INP1:BAND?",
+            "Pre Filter"               : "INP1:FILT?",
+            "CH1 Input Type"           : "INP1:TYPE?",
+            "CH1 Impedance"            : "INP1:IMP?",
+            "CH1 Ground/Common"        : "INP1:COMM?",
+        },
 
-        # --- Analyzer Function ---
-        "Measurement Function"     : "CALC:FUNC:TYPE?",       # e.g. RMS
-        "S/N Sequence"             : "CALC:SEQ?",             # If supported
-        "Meas Time Mode"           : "CALC:TIME:MODE?",       # e.g. GEN or AUTO
-        "Notch Filter"             : "CALC:NOTC:STAT?",       # ON/OFF
-        "Filter"                   : "CALC:FILT:STAT?",       # ON/OFF
-        "Avg Type"                 : "CALC:AVER:TYPE?",
-        "Avg Count"                : "CALC:AVER:COUN?",
+        "📐 Analyzer Function": {
+            "Measurement Function"     : "CALC:FUNC:TYPE?",
+            "S/N Sequence"             : "CALC:SEQ?",
+            "Meas Time Mode"           : "CALC:TIME:MODE?",
+            "Notch Filter"             : "CALC:NOTC:STAT?",
+            "Filter"                   : "CALC:FILT:STAT?",
+            "Avg Type"                 : "CALC:AVER:TYPE?",
+            "Avg Count"                : "CALC:AVER:COUN?",
+        }
     }
 
-    for label, cmd in commands.items():
-        try:
-            response = upv.query(cmd).strip()
-        except Exception as e:
-            response = f"Unavailable ({e})"
-        print(f"{label:30}: {response}")
+    for section, cmds in grouped_commands.items():
+        print(f"\n{section}")
+        print("-" * len(section))
+        for label, cmd in cmds.items():
+            try:
+                response = upv.query(cmd).strip()
+            except Exception as e:
+                response = f"Unavailable ({e})"
+            print(f"{label:30}: {response}")
 
 
 def main():
