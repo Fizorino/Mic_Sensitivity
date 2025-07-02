@@ -4,7 +4,8 @@ from pathlib import Path
 
 CONFIG_FILE = "config.json"
 SETTINGS_FILE = "settings.json"
-SET_FILE_PATH = "C:\Documents and Settings\instrument\Desktop\COP_Sensitivity.set"
+SET_FILE_PATH = r"C:\Documents and Settings\instrument\Desktop\COP_Sensitivity.set"
+
 
 def find_upv_ip():
     rm = pyvisa.ResourceManager()
