@@ -6,3 +6,5 @@ rm = pyvisa.ResourceManager()
 
 resources = rm.list_resources()
 print("Available instruments:", resources)
+
+#TEsting
