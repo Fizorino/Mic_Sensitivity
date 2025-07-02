@@ -1,0 +1,37 @@
+{
+  "Generator Config": {
+    "Instrument": "ANALOG",
+    "Channel": "1",
+    "Output Type (Unbal/Bal)": "UNBAL",
+    "Impedance": "600",
+    "Bandwidth": "22000",
+    "Generator Voltage Range": "AUTO"
+  },
+
+  "Generator Function": {
+    "Waveform Function": "SINE",
+    "Frequency": 1000,
+    "Sweep Mode": "OFF",
+    "Sweep Type": "LIN"
+  },
+
+  "Analyzer Config": {
+    "Analyzer Instrument": "ANALOG",
+    "CH1 Coupling": "AC",
+    "CH1 Bandwidth": "22000",
+    "Pre Filter": "OFF",
+    "CH1 Input Type": "BAL",
+    "CH1 Impedance": "200000",
+    "CH1 Ground/Common": "GND"
+  },
+
+  "Analyzer Function": {
+    "Measurement Function": "RMS",
+    "S/N Sequence": "SEQ1",
+    "Meas Time Mode": "AUTO",
+    "Notch Filter": "OFF",
+    "Filter": "OFF",
+    "Avg Type": "EXP",
+    "Avg Count": 4
+  }
+}

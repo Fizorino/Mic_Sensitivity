@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 CONFIG_FILE = "config.json"
+SETTINGS_FILE = "settings.json"
 SET_FILE_PATH = "C:/Documents and Settings/instrument/Desktop/COP_Sensitivity.set"
 
 def find_upv_ip():
@@ -34,62 +35,56 @@ def load_config():
             return json.load(f).get("visa_address")
     return None
 
-def display_upv_settings(upv):
-    print("\n📋 UPV Configuration:")
+def apply_grouped_settings(upv, config_file=SETTINGS_FILE):
+    with open(config_file, "r") as f:
+        data = json.load(f)
 
-    grouped_commands = {
-        "🔧 Generator Config": {
-            "Instrument"               : "SOUR:INP:SEL",
-            "Channel"                  : "SOUR:CHAN?",
-            "Output Type (Unbal/Bal)"  : "OUTP:TYPE",
-            "Impedance"                : "OUTP:IMP:UNB?",
-            "Bandwidth"                : "SOUR:BAND?",
-            "Generator Voltage Range"  : "SOUR:VOLT:RANG?",
-            # Instrument               : Unavailable (VI_ERROR_TMO (-1073807339): Timeout expired before operation completed.)
-        },
+    command_map = {
+        "Instrument"               : "SOUR:INP:SEL",
+        "Channel"                  : "SOUR:CHAN",
+        "Output Type (Unbal/Bal)"  : "OUTP:TYPE",
+        "Impedance"                : "OUTP:IMP:UNB",
+        "Bandwidth"                : "SOUR:BAND",
+        "Generator Voltage Range"  : "SOUR:VOLT:RANG",
 
-        "🎵 Generator Function": {
-            "Waveform Function"        : "SOUR:FUNC:SHAP?",
-            "Frequency"                : "SOUR:FREQ?",
-            "Sweep Mode"               : "SOUR:SWE:STAT?",
-            "Sweep Type"               : "SOUR:SWE:TYPE?",
-        },
+        "Waveform Function"        : "SOUR:FUNC:SHAP",
+        "Frequency"                : "SOUR:FREQ",
+        "Sweep Mode"               : "SOUR:SWE:STAT",
+        "Sweep Type"               : "SOUR:SWE:TYPE",
 
-        "🎧 Analyzer Config": {
-            "Analyzer Instrument"      : "CALC:INP:SEL?",
-            "CH1 Coupling"             : "INP1:COUP?",
-            "CH1 Bandwidth"            : "INP1:BAND?",
-            "Pre Filter"               : "INP1:FILT?",
-            "CH1 Input Type"           : "INP1:TYPE?",
-            "CH1 Impedance"            : "INP1:IMP?",
-            "CH1 Ground/Common"        : "INP1:COMM?",
-        },
+        "Analyzer Instrument"      : "CALC:INP:SEL",
+        "CH1 Coupling"             : "INP1:COUP",
+        "CH1 Bandwidth"            : "INP1:BAND",
+        "Pre Filter"               : "INP1:FILT",
+        "CH1 Input Type"           : "INP1:TYPE",
+        "CH1 Impedance"            : "INP1:IMP",
+        "CH1 Ground/Common"        : "INP1:COMM",
 
-        "📐 Analyzer Function": {
-            "Measurement Function"     : "CALC:FUNC:TYPE?",
-            "S/N Sequence"             : "CALC:SEQ?",
-            "Meas Time Mode"           : "CALC:TIME:MODE?",
-            "Notch Filter"             : "CALC:NOTC:STAT?",
-            "Filter"                   : "CALC:FILT:STAT?",
-            "Avg Type"                 : "CALC:AVER:TYPE?",
-            "Avg Count"                : "CALC:AVER:COUN?",
-        }
+        "Measurement Function"     : "CALC:FUNC:TYPE",
+        "S/N Sequence"             : "CALC:SEQ",
+        "Meas Time Mode"           : "CALC:TIME:MODE",
+        "Notch Filter"             : "CALC:NOTC:STAT",
+        "Filter"                   : "CALC:FILT:STAT",
+        "Avg Type"                 : "CALC:AVER:TYPE",
+        "Avg Count"                : "CALC:AVER:COUN"
     }
 
-    for section, cmds in grouped_commands.items():
-        print(f"\n{section}")
-        print("-" * len(section))
-        for label, cmd in cmds.items():
-            try:
-                response = upv.query(cmd).strip()
-            except Exception as e:
-                response = f"Unavailable ({e})"
-            print(f"{label:30}: {response}")
-
+    for section, settings in data.items():
+        print(f"\n➡️ Applying {section}")
+        for label, value in settings.items():
+            scpi = command_map.get(label)
+            if scpi:
+                try:
+                    upv.write(f"{scpi} {value}")
+                    print(f"   ✓ {label}: {value}")
+                except Exception as e:
+                    print(f"   ❌ Failed to apply {label}: {e}")
+            else:
+                print(f"   ⚠️ Unknown setting label: {label}")
 
 def main():
     rm = pyvisa.ResourceManager()
-    
+
     # Try loading from config first
     visa_address = load_config()
     if visa_address:
@@ -102,14 +97,19 @@ def main():
 
     try:
         upv = rm.open_resource(visa_address)
+        upv.timeout = 3000  # Timeout in milliseconds
         print("✅ Connected to:", upv.query("*IDN?").strip())
 
-        # 🔽 Place it here
-        print(f"📂 Loading setup file: {SET_FILE_PATH}")
-        upv.write(f"MMEM:LOAD:STAT '{SET_FILE_PATH}'")
+        # Load setup file if it exists
+        if Path(SET_FILE_PATH).exists():
+            safe_path = SET_FILE_PATH.replace("\\", "/")
+            print(f"📂 Loading setup file: {SET_FILE_PATH}")
+            upv.write(f"MMEM:LOAD:STAT '{safe_path}'")
+        else:
+            print("⚠️ SET file not found. Skipping setup load.")
 
-        # 🔽 Then display settings from that .SET config
-        display_upv_settings(upv)
+        # Apply settings from JSON
+        apply_grouped_settings(upv)
 
     except Exception as e:
         print("❌ Error communicating with UPV:", e)
