@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 CONFIG_FILE = "config.json"
-SET_FILE_PATH = "D:\\Rohde&Schwarz\\UPV\\UserData\\Setups\\COP_Sensitivity.set"
+SET_FILE_PATH = "C:/Documents and Settings/instrument/Desktop/COP_Sensitivity.set"
 
 def find_upv_ip():
     rm = pyvisa.ResourceManager()
