@@ -39,12 +39,13 @@ def display_upv_settings(upv):
 
     grouped_commands = {
         "🔧 Generator Config": {
-            "Instrument"               : "SOUR:INP:SEL <type>",
+            "Instrument"               : "SOUR:INP:SEL",
             "Channel"                  : "SOUR:CHAN?",
             "Output Type (Unbal/Bal)"  : "OUTP:TYPE",
             "Impedance"                : "OUTP:IMP:UNB?",
             "Bandwidth"                : "SOUR:BAND?",
             "Generator Voltage Range"  : "SOUR:VOLT:RANG?",
+            # Instrument               : Unavailable (VI_ERROR_TMO (-1073807339): Timeout expired before operation completed.)
         },
 
         "🎵 Generator Function": {
