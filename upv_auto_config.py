@@ -42,7 +42,7 @@ def display_upv_settings(upv):
             "Generator Instrument"     : "SOUR:INP:SEL <type>",
             "Generator Channel"        : "SOUR:CHAN?",
             "Output Impedance"         : "OUTP:IMP:UNB?",
-            "Output Type (Unbal/Bal)"  : "OUTP:COUP?",
+            "Output Type (Unbal/Bal)"  : "OUTP:TYPE",
             "Generator Bandwidth"      : "SOUR:BAND?",
             "Generator Voltage Range"  : "SOUR:VOLT:RANG?",
         },
