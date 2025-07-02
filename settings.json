@@ -1,7 +1,7 @@
 {
   "Generator Config": {
     "Instrument": "ANALOG",
-    "Channel": "1",
+    "Channel": "2",
     "Output Type (Unbal/Bal)": "UNBAL",
     "Impedance": "600",
     "Bandwidth": "22000",
