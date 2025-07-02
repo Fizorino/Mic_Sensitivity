@@ -36,17 +36,39 @@ def load_config():
 
 def display_upv_settings(upv):
     print("\n📋 UPV Configuration:\n")
+
     commands = {
-        "Input Range"        : "INP1:RANG?",
-        "Measurement Type"   : "CALC:FUNC:TYPE?",
-        "Input Coupling"     : "INP1:COUP?",
-        "Trigger Source"     : "TRIG:SOUR?",
-        "Mic Sensitivity"    : "SENS:MIC:SENS?",
-        "Input Impedance"    : "INP1:IMP?",
-        "Sampling Rate"      : "SENS:RATE?",
-        "Averaging Count"    : "CALC:AVER:COUN?",
-        "Frequency"          : "SOUR:FREQ?",
-        "Level"              : "SOUR:LEV?"
+        # --- Generator Config ---
+        "Generator Instrument"     : "SOUR:INP:SEL?",         # Might return 'ANALOG'
+        "Generator Channel"        : "SOUR:CHAN?",            # May not apply directly
+        "Output Impedance"         : "OUTP:IMP?",             # e.g. 5 ohm
+        "Output Type (Unbal/Bal)"  : "OUTP:COUP?",            # May need interpretation
+        "Generator Bandwidth"      : "SOUR:BAND?",            # If supported
+        "Generator Voltage Range"  : "SOUR:VOLT:RANG?",       # Or SENS:RANG?
+
+        # --- Generator Function ---
+        "Waveform Function"        : "SOUR:FUNC:SHAP?",       # e.g. SINE
+        "Frequency"                : "SOUR:FREQ?",            # e.g. 1 kHz
+        "Sweep Mode"               : "SOUR:SWE:STAT?",        # ON/OFF
+        "Sweep Type"               : "SOUR:SWE:TYPE?",        # e.g. LIN
+
+        # --- Analyzer Config ---
+        "Analyzer Instrument"      : "CALC:INP:SEL?",         # e.g. ANALOG
+        "CH1 Coupling"             : "INP1:COUP?",
+        "CH1 Bandwidth"            : "INP1:BAND?",            # or LPAS?
+        "Pre Filter"               : "INP1:FILT?",            # Try filter settings
+        "CH1 Input Type"           : "INP1:TYPE?",            # e.g. BAL
+        "CH1 Impedance"            : "INP1:IMP?",
+        "CH1 Ground/Common"        : "INP1:COMM?",            # FLOAT/GND
+
+        # --- Analyzer Function ---
+        "Measurement Function"     : "CALC:FUNC:TYPE?",       # e.g. RMS
+        "S/N Sequence"             : "CALC:SEQ?",             # If supported
+        "Meas Time Mode"           : "CALC:TIME:MODE?",       # e.g. GEN or AUTO
+        "Notch Filter"             : "CALC:NOTC:STAT?",       # ON/OFF
+        "Filter"                   : "CALC:FILT:STAT?",       # ON/OFF
+        "Avg Type"                 : "CALC:AVER:TYPE?",
+        "Avg Count"                : "CALC:AVER:COUN?",
     }
 
     for label, cmd in commands.items():
@@ -54,7 +76,8 @@ def display_upv_settings(upv):
             response = upv.query(cmd).strip()
         except Exception as e:
             response = f"Unavailable ({e})"
-        print(f"{label:20}: {response}")
+        print(f"{label:30}: {response}")
+
 
 def main():
     rm = pyvisa.ResourceManager()
@@ -73,11 +96,11 @@ def main():
         upv = rm.open_resource(visa_address)
         print("✅ Connected to:", upv.query("*IDN?").strip())
 
-        # Load the .SET file
+        # 🔽 Place it here
         print(f"📂 Loading setup file: {SET_FILE_PATH}")
         upv.write(f"MMEM:LOAD:STAT '{SET_FILE_PATH}'")
 
-        # Display config
+        # 🔽 Then display settings from that .SET config
         display_upv_settings(upv)
 
     except Exception as e:
