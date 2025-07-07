@@ -1,37 +1,70 @@
 {
   "Generator Config": {
-    "Instrument": "ANALOG",
-    "Channel": "2",
-    "Output Type (Unbal/Bal)": "UNBAL",
-    "Impedance": "600",
-    "Bandwidth": "22000",
-    "Generator Voltage Range": "AUTO"
+    "Instrument": "ANLG",
+    "Channel": "CH1",
+    "Output Type (Unbal/Bal)": "UNB",
+    "Impedance": "R5",
+    "Common (Float/Ground)" : "GRO",
+    "Bandwidth": "B22",
+    "Volt Range (Auto/Fix)": "AUTO",
+    "Max Voltage": "10",
+    "Ref Voltage" : "-91.15 dBV",
+    "Ref Frequency": "1000"
   },
 
   "Generator Function": {
-    "Waveform Function": "SINE",
-    "Frequency": 1000,
-    "Sweep Mode": "OFF",
-    "Sweep Type": "LIN"
+    "Function": "SIN",
+    "Low Dist": "OFF",
+    "Sweep Ctrl": "ASW",
+    "Next Step": "ASYN",
+    "X Axis": "FREQ",
+    "Z Axis": "OFF",
+    "Frequency": "LOGP",
+    "Start": "100 Hz",
+    "Stop": "20 kHz",
+    "Points": "101",
+    "Halt": "MUTE",
+    "Voltage": "94 dBr",
+    "Filter": "OFF",
+    "Equalizer": "ON",
+    "DC Offset": "OFF"
   },
 
   "Analyzer Config": {
-    "Analyzer Instrument": "ANALOG",
+    "Instrument": "ANLG",
+    "Channel": "CH1",
     "CH1 Coupling": "AC",
-    "CH1 Bandwidth": "22000",
-    "Pre Filter": "OFF",
-    "CH1 Input Type": "BAL",
-    "CH1 Impedance": "200000",
-    "CH1 Ground/Common": "GND"
+    "Bandwidth": "B22",
+    "Pre Filter": "UFIL1",
+    "CH1 Input": "BAL",
+    "CH1 Impedance": "R200K",
+    "CH1 Ground/Common": "GRO",
+    "CH1 Range": "AUTO",
+    "Ref Imped": "600",
+    "Start Cond": "AUTO",
+    "Delay": "0",
+    "Play bef.Meas": "OFF",
+    "MAX FFT Size": "S256K"
   },
 
   "Analyzer Function": {
-    "Measurement Function": "RMS",
-    "S/N Sequence": "SEQ1",
-    "Meas Time Mode": "AUTO",
-    "Notch Filter": "OFF",
-    "Filter": "OFF",
-    "Avg Type": "EXP",
-    "Avg Count": 4
+    "Function": "RMS",
+    "S/N Sequence": "OFF",
+    "Meas Time": "GENT",
+    "Notch(Gain)": "OFF",
+    "Filter1": "OFF",
+    "Filter2": "OFF",
+    "Filter3": "OFF",
+    "Fnct Setting": "EXP",
+    "Samples": "3",
+    "Tolerance": "0.1",
+    "Resolution": "0.1 dBV",
+    "Timeout": "10",
+    "Bargraph": "OFF",
+    "POST FFT": "OFF",
+    "Level Monitor": "OFF",
+    "2nd Monitor": "INP",
+    "Input Monitor": "OFF",
+    "Waveform": "OFF"
   }
 }

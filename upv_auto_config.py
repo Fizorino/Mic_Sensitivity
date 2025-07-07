@@ -4,8 +4,8 @@ from pathlib import Path
 
 CONFIG_FILE = "config.json"
 SETTINGS_FILE = "settings.json"
-SET_FILE_PATH = r"C:\Documents and Settings\instrument\Desktop\COP_Sensitivity.set"
-
+SET_FILE_NAME = "C:\\Documents and Settings\\instrument\Desktop\\COP_Sensitivity.set"  # File is on the UPV
+SET_FILE_PATH_ON_UPV = f"{SET_FILE_NAME}"  # Update if the file is in a subdirectory
 
 def find_upv_ip():
     rm = pyvisa.ResourceManager()
@@ -37,83 +37,138 @@ def load_config():
     return None
 
 def apply_grouped_settings(upv, config_file=SETTINGS_FILE):
+    if not Path(config_file).exists():
+        print(f"⚠️ Settings file '{config_file}' not found.")
+        return
+
     with open(config_file, "r") as f:
         data = json.load(f)
 
     command_map = {
-        "Instrument"               : "SOUR:INP:SEL",
-        "Channel"                  : "SOUR:CHAN",
+        "Instrument"               : "INST1",
+        "Channel"                  : "OUTP:CHAN",
         "Output Type (Unbal/Bal)"  : "OUTP:TYPE",
-        "Impedance"                : "OUTP:IMP:UNB",
-        "Bandwidth"                : "SOUR:BAND",
-        "Generator Voltage Range"  : "SOUR:VOLT:RANG",
+        "Impedance"                : "OUTP:IMP:UNB?",
+        "Common (Float/Ground)"    : "OUTP:LOW",
+        "Bandwidth"                : "OUTP:BAND:MODE",
+        "Volt Range (Auto/Fix)"    : "SOUR:VOLT:RANG",
+        "Max Voltage"              : "SOUR:VOLT:MAX",
+        "Ref Voltage"              : "SOUR:VOLT:REF",
+        "Ref Frequency"            : "SOUR:FREQ:REF",
 
-        "Waveform Function"        : "SOUR:FUNC:SHAP",
-        "Frequency"                : "SOUR:FREQ",
-        "Sweep Mode"               : "SOUR:SWE:STAT",
-        "Sweep Type"               : "SOUR:SWE:TYPE",
+        "Function"                 : "SOUR:FUNC",
+        "Low Dist"                 : "SOUR:LOWD",
+        "Sweep Ctrl"               : "SOUR:SWE:CONT",
+        "Next Step"                : "SOUR:SWE:NEXT",
+        "X Axis"                   : "SOUR:SWE:XAX",
+        "Z Axis"                   : "SOUR:SWE:AX",
+        "Frequency"                : "SOUR:SWE:FREQ:SPAC",
+        "Start"                    : "SOUR:SWE:FREQ:STAR",
+        "Stop"                     : "SOUR:SWE:FREQ:STOP",
+        "Points"                   : "SOUR:SWE:FREQ:POIN",
+        "Halt"                     : "SOUR:SWE:FREQ:HALT",
+        "Voltage"                  : "SOUR:VOLT",
+        "Filter"                   : "SOUR:FILT",
+        "Equalizer"                : "SOUR:VOLT:",
+        "DC Offset"                : "SOUR:VOLT:OFFS:STAT",
 
-        "Analyzer Instrument"      : "CALC:INP:SEL",
+        "Instrument"               : "INST2",
+        "Channel"                  : "INP1:CHAN",
         "CH1 Coupling"             : "INP1:COUP",
-        "CH1 Bandwidth"            : "INP1:BAND",
+        "Bandwidth"                : "INP1:BAND:MODE",
         "Pre Filter"               : "INP1:FILT",
-        "CH1 Input Type"           : "INP1:TYPE",
+        "CH1 Input"                : "INP1:TYPE",
         "CH1 Impedance"            : "INP1:IMP",
         "CH1 Ground/Common"        : "INP1:COMM",
+        "CH1 Range"                : "SENS:VOLT:RANG1:MODE",
+        "Ref Imped"                : "SENS1:POW:REF:RES",
+        "Start Cond"               : "TRIG:SOUR",
+        "Delay"                    : "TRIG:DEL",
+        "Play bef.Meas"            : "TRIG:PLAY",
+        "MAX FFT Size"             : "SENS1:MAX:FFT:SIZE",
 
-        "Measurement Function"     : "CALC:FUNC:TYPE",
-        "S/N Sequence"             : "CALC:SEQ",
-        "Meas Time Mode"           : "CALC:TIME:MODE",
-        "Notch Filter"             : "CALC:NOTC:STAT",
-        "Filter"                   : "CALC:FILT:STAT",
-        "Avg Type"                 : "CALC:AVER:TYPE",
-        "Avg Count"                : "CALC:AVER:COUN"
+        "Function"                 : "SENS:FUNC",
+        "S/N Sequence"             : "SENS1:FUNC:SNS",
+        "Meas Time"                : "SENS1:FUNC:APER:MODE",
+        "Notch(Gain)"              : "SENS1:NOTCh",
+        "Filter1"                  : "SENS1:FILT1",
+        "Filter2"                  : "SENS1:FILT2",
+        "Filter3"                  : "SENS1:FILT3",
+        "Fnct Setting"             : "SENS1:FUNC:SETT:MODE",
+        "Samples"                  : "SENS1:FUNC:SETT:COUN",
+        "Tolerance"                : "SENS1:FUNC:SETT:TOL",
+        "Resolution"               : "SENS1:FUNC:SETT:RES",
+        "Timeout"                  : "SENS1:FUNC:SETT:TOUT",
+        "Bargraph"                 : "SENS1:FUNC:BARG",
+        "POST FFT"                 : "SENS1:FUNC:FFT:STAT",
+        "Level Monitor"            : "SENSE6:FUNC",
+        "2nd Monitor"              : "SENSE2:FUNC:SNDM",
+        "Input Monitor"            : "SENSE2:FUNCtion",
+        "Freq/Phase"               : "SENSE3:FUNCtion",
+        "Waveform"                 : "SENSE7:FUNCtion",
     }
 
-    for section, settings in data.items():
-        print(f"\n➡️ Applying {section}")
-        for label, value in settings.items():
-            scpi = command_map.get(label)
-            if scpi:
-                try:
-                    upv.write(f"{scpi} {value}")
-                    print(f"   ✓ {label}: {value}")
-                except Exception as e:
-                    print(f"   ❌ Failed to apply {label}: {e}")
-            else:
-                print(f"   ⚠️ Unknown setting label: {label}")
+    execution_order = [
+        "Generator Config",
+        "Generator Function",
+        "Analyzer Config",
+        "Analyzer Function"
+    ]
+
+    for section in execution_order:
+        if section in data:
+            print(f"\n➡️ Applying {section}")
+            settings = data[section]
+            for label, value in settings.items():
+                scpi = command_map.get(label)
+                if scpi:
+                    try:
+                        upv.write(f"{scpi} {value}")
+                        print(f"   ✓ {label}: {value}")
+                    except Exception as e:
+                        print(f"   ❌ Failed to apply {label}: {e}")
+                else:
+                    print(f"   ⚠️ Unknown setting label: {label}")
+        else:
+            print(f"⚠️ Section '{section}' not found in settings.")
 
 def main():
     rm = pyvisa.ResourceManager()
 
-    # Try loading from config first
+    # Try loading saved VISA address
     visa_address = load_config()
-    if visa_address:
-        print(f"📁 Using saved VISA address: {visa_address}")
-    else:
+    if not visa_address:
         visa_address = find_upv_ip()
-
     if not visa_address:
         return
 
-    try:
-        upv = rm.open_resource(visa_address)
-        upv.timeout = 3000  # Timeout in milliseconds
-        print("✅ Connected to:", upv.query("*IDN?").strip())
+    # Retry connection logic
+    import time
+    for attempt in range(2):
+        try:
+            upv = rm.open_resource(visa_address)
+            upv.timeout = 3000
+            print("✅ Connected to:", upv.query("*IDN?").strip())
 
-        # Load setup file if it exists
-        if Path(SET_FILE_PATH).exists():
-            safe_path = SET_FILE_PATH.replace("\\", "/")
-            print(f"📂 Loading setup file: {SET_FILE_PATH}")
-            upv.write(f"MMEM:LOAD:STAT '{safe_path}'")
-        else:
-            print("⚠️ SET file not found. Skipping setup load.")
+            # Load setup file from UPV
+            print(f"\n📂 Loading setup file from UPV: {SET_FILE_PATH_ON_UPV}")
+            upv.write(f'SYST:SET:LOAD "{SET_FILE_PATH_ON_UPV}"')
 
-        # Apply settings from JSON
-        apply_grouped_settings(upv)
+            # Start scanning
+            print("▶️ Starting measurement (INIT:CONT ON)")
+            upv.write("INIT:CONT ON")
 
-    except Exception as e:
-        print("❌ Error communicating with UPV:", e)
+            # Apply settings from JSON
+            apply_grouped_settings(upv)
+            break  # Success — exit retry loop
+
+        except Exception as e:
+            if attempt == 0:
+                print("⚠️ First connection attempt failed. Retrying in 1.5 seconds...")
+                time.sleep(1.5)
+            else:
+                print("❌ Error communicating with UPV:", e)
+                return
 
 if __name__ == "__main__":
     main()
