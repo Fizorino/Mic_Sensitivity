@@ -144,13 +144,21 @@ def fetch_and_plot_trace(upv):
         x_vals = np.fromstring(x_raw, sep=',')
         y_vals = np.fromstring(y_raw, sep=',')
 
-        # Save to HXML (pseudo XML format)
-        with open(EXPORT_FILE, "w") as f:
-            f.write("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
-            f.write("<SweepTrace>\n")
-            for x, y in zip(x_vals, y_vals):
-                f.write(f"  <Point><Frequency>{x}</Frequency><Level>{y}</Level></Point>\n")
-            f.write("</SweepTrace>\n")
+        # Save to HXML (R&S-compatible format)
+        with open(EXPORT_FILE, "w", encoding="utf-8") as f:
+            f.write('<?xml version="1.0" encoding="utf-8"?>\n')
+            f.write("<Root>\n")
+            f.write("  <Measurement>\n")
+            f.write("    <Sweep>\n")
+            f.write("      <Trace>\n")
+            f.write("        <Data>\n")
+            f.write('          <X unit="Hz">' + ",".join(f"{x:.6f}" for x in x_vals) + "</X>\n")
+            f.write('          <Y unit="dBV">' + ",".join(f"{y:.6f}" for y in y_vals) + "</Y>\n")
+            f.write("        </Data>\n")
+            f.write("      </Trace>\n")
+            f.write("    </Sweep>\n")
+            f.write("  </Measurement>\n")
+            f.write("</Root>\n")
 
         print(f"✅ Trace data saved to '{EXPORT_FILE}'")
 
@@ -166,6 +174,7 @@ def fetch_and_plot_trace(upv):
 
     except Exception as e:
         print(f"❌ Failed to fetch or plot trace: {e}")
+
 
 def main():
     rm = pyvisa.ResourceManager()
