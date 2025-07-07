@@ -45,12 +45,12 @@ def apply_grouped_settings(upv, config_file=SETTINGS_FILE):
         data = json.load(f)
 
     command_map = {
-        "Instrument"               : "INST1",
-        "Channel"                  : "OUTP:CHAN",
+        "Instrument Generator"     : "INST1",
+        "Channel Generator"        : "OUTP:CHAN",
         "Output Type (Unbal/Bal)"  : "OUTP:TYPE",
         "Impedance"                : "OUTP:IMP:UNB?",
         "Common (Float/Ground)"    : "OUTP:LOW",
-        "Bandwidth"                : "OUTP:BAND:MODE",
+        "Bandwidth Generator"      : "OUTP:BAND:MODE",
         "Volt Range (Auto/Fix)"    : "SOUR:VOLT:RANG",
         "Max Voltage"              : "SOUR:VOLT:MAX",
         "Ref Voltage"              : "SOUR:VOLT:REF",
@@ -61,7 +61,7 @@ def apply_grouped_settings(upv, config_file=SETTINGS_FILE):
         "Sweep Ctrl"               : "SOUR:SWE:CONT",
         "Next Step"                : "SOUR:SWE:NEXT",
         "X Axis"                   : "SOUR:SWE:XAX",
-        "Z Axis"                   : "SOUR:SWE:AX",
+        "Z Axis"                   : "SOUR:SWE:ZAX",
         "Frequency"                : "SOUR:SWE:FREQ:SPAC",
         "Start"                    : "SOUR:SWE:FREQ:STAR",
         "Stop"                     : "SOUR:SWE:FREQ:STOP",
@@ -72,10 +72,10 @@ def apply_grouped_settings(upv, config_file=SETTINGS_FILE):
         "Equalizer"                : "SOUR:VOLT:",
         "DC Offset"                : "SOUR:VOLT:OFFS:STAT",
 
-        "Instrument"               : "INST2",
-        "Channel"                  : "INP1:CHAN",
+        "Instrument Analog"        : "INST2",
+        "Channel Analog"           : "INP1:CHAN",
         "CH1 Coupling"             : "INP1:COUP",
-        "Bandwidth"                : "INP1:BAND:MODE",
+        "Bandwidth Analog"         : "INP1:BAND:MODE",
         "Pre Filter"               : "INP1:FILT",
         "CH1 Input"                : "INP1:TYPE",
         "CH1 Impedance"            : "INP1:IMP",
@@ -133,42 +133,56 @@ def apply_grouped_settings(upv, config_file=SETTINGS_FILE):
             print(f"⚠️ Section '{section}' not found in settings.")
 
 def main():
+    import time
     rm = pyvisa.ResourceManager()
 
-    # Try loading saved VISA address
     visa_address = load_config()
+    upv = None
+
+    # Try connecting using saved address first (with retry)
+    if visa_address:
+        for attempt in range(2):
+            try:
+                print(f"🔌 Trying saved UPV address: {visa_address}")
+                upv = rm.open_resource(visa_address)
+                upv.timeout = 3000
+                print("✅ Connected to:", upv.query("*IDN?").strip())
+                break
+            except Exception as e:
+                print(f"⚠️ Attempt {attempt+1} failed: {e}")
+                if attempt == 0:
+                    print("🔁 Retrying in 1.5 seconds...")
+                    time.sleep(1.5)
+                else:
+                    print("❌ Saved address failed. Searching for a new UPV...")
+                    visa_address = None  # Invalidate and try scanning
+
+    # If saved address failed or not available, find a new one
     if not visa_address:
         visa_address = find_upv_ip()
-    if not visa_address:
-        return
-
-    # Retry connection logic
-    import time
-    for attempt in range(2):
+        if not visa_address:
+            print("❌ No UPV found on the network.")
+            return
         try:
             upv = rm.open_resource(visa_address)
             upv.timeout = 3000
-            print("✅ Connected to:", upv.query("*IDN?").strip())
-
-            # Load setup file from UPV
-            print(f"\n📂 Loading setup file from UPV: {SET_FILE_PATH_ON_UPV}")
-            upv.write(f'SYST:SET:LOAD "{SET_FILE_PATH_ON_UPV}"')
-
-            # Start scanning
-            print("▶️ Starting measurement (INIT:CONT ON)")
-            upv.write("INIT:CONT ON")
-
-            # Apply settings from JSON
-            apply_grouped_settings(upv)
-            break  # Success — exit retry loop
-
+            print("✅ Connected to new UPV:", upv.query("*IDN?").strip())
+            save_config(visa_address)  # Update the saved address
         except Exception as e:
-            if attempt == 0:
-                print("⚠️ First connection attempt failed. Retrying in 1.5 seconds...")
-                time.sleep(1.5)
-            else:
-                print("❌ Error communicating with UPV:", e)
-                return
+            print("❌ Failed to connect to newly found UPV:", e)
+            return
+
+    # Load setup file from UPV
+    print(f"\n📂 Loading setup file from UPV: {SET_FILE_PATH_ON_UPV}")
+    upv.write(f'SYST:SET:LOAD "{SET_FILE_PATH_ON_UPV}"')
+
+    # Start scanning
+    print("▶️ Starting measurement (INIT:CONT ON)")
+    upv.write("INIT:CONT ON")
+
+    # Apply settings from JSON
+    apply_grouped_settings(upv)
+
 
 if __name__ == "__main__":
     main()

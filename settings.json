@@ -1,11 +1,11 @@
 {
   "Generator Config": {
-    "Instrument": "ANLG",
-    "Channel": "CH1",
+    "Instrument Generator": "ANLG",
+    "Channel Generator": "CH1",
     "Output Type (Unbal/Bal)": "UNB",
     "Impedance": "R5",
     "Common (Float/Ground)" : "GRO",
-    "Bandwidth": "B22",
+    "Bandwidth Generator": "B22",
     "Volt Range (Auto/Fix)": "AUTO",
     "Max Voltage": "10",
     "Ref Voltage" : "-91.15 dBV",
@@ -31,10 +31,10 @@
   },
 
   "Analyzer Config": {
-    "Instrument": "ANLG",
-    "Channel": "CH1",
+    "Instrument Analog": "ANLG",
+    "Channel Analog": "CH1",
     "CH1 Coupling": "AC",
-    "Bandwidth": "B22",
+    "Bandwidth Analog": "B22",
     "Pre Filter": "UFIL1",
     "CH1 Input": "BAL",
     "CH1 Impedance": "R200K",
