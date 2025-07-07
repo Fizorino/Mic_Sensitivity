@@ -237,3 +237,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+#error while loading files. No files to plot: Dot indexing is not supported for variables of this type.
