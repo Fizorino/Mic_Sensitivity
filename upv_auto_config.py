@@ -138,53 +138,56 @@ def apply_grouped_settings(upv, config_file=SETTINGS_FILE):
 
 
 
+import datetime
+
 def fetch_and_plot_trace(upv):
     try:
         print("📊 Fetching Sweep trace data directly from UPV...")
 
-        # Query X and Y data from UPV
         x_raw = upv.query("TRAC:SWE1:LOAD:AX?")
         y_raw = upv.query("TRAC:SWE1:LOAD:AY?")
         x_vals = np.fromstring(x_raw, sep=',')
         y_vals = np.fromstring(y_raw, sep=',')
 
-        if len(x_vals) != len(y_vals):
-            raise ValueError("Mismatch between X and Y data lengths")
+        if len(x_vals) != len(y_vals) or len(x_vals) == 0:
+            raise ValueError("Empty or mismatched sweep data.")
 
-        # Construct XML structure
-        hxml = ET.Element("hxml")
+        now = datetime.datetime.now().strftime("%d-%b-%Y %H:%M:%S")
 
-        # <head><Document>...</Document></head>
-        head = ET.SubElement(hxml, "head")
-        doc = ET.SubElement(head, "Document")
-        ET.SubElement(doc, "DataType").text = "curve"
-        ET.SubElement(doc, "DataVersion").text = "1.0"
-        ET.SubElement(doc, "PlatformVersion").text = "1.0"
-        ET.SubElement(doc, "LDocNode").text = "default"
+        # Step 1: Write the RDStarter-compatible XML
+        with open(EXPORT_FILE, "w", encoding="utf-8") as f:
+            f.write('<?xml version="1.0" encoding="utf-8"?>\n')
+            f.write("<hxml>\n")
+            f.write("  <head>\n")
+            f.write("    <Document>\n")
+            f.write("      <DataVersion XsdVersion=\"0.0.0.1\">0.0.0.1</DataVersion>\n")
+            f.write("      <DataType>hiCurve</DataType>\n")
+            f.write("      <LDocNode>//hxml/data</LDocNode>\n")
+            f.write("      <PlatformVersion>n.a.</PlatformVersion>\n")
+            f.write("    </Document>\n")
+            f.write("  </head>\n")
+            f.write("  <data>\n")
+            f.write("    <dataset WorkingTitle=\"UPV Measurement\">\n")
+            f.write("      <longDataSetDesc/>\n")
+            f.write("      <shortDataSetDesc/>\n")
+            f.write("      <acpEarhookType/>\n")
+            f.write("      <v-curvedata>\n")
+            f.write(f"        <curvedata CurveDataName=\"LevelSweep\" MeasurementDate=\"{now}\"\n")
+            f.write("                   TestEquipmentNr=\"UPV_Audio_Analyzer\"\n")
+            f.write("                   Tester=\"PythonApp\">\n")
+            f.write("          <longCurveDesc/>\n")
+            f.write("          <shortCurveDesc/>\n")
+            f.write("          <curve name=\"f\" unit=\"Hz\">[" + " ".join(f"{x:.6f}" for x in x_vals) + "]</curve>\n")
+            f.write("          <curve name=\"magnitude\" unit=\"dBV\">[" + " ".join(f"{y:.6f}" for y in y_vals) + "]</curve>\n")
+            f.write("        </curvedata>\n")
+            f.write("      </v-curvedata>\n")
+            f.write("    </dataset>\n")
+            f.write("  </data>\n")
+            f.write("</hxml>\n")
 
-        # <data><dataset>...</dataset></data>
-        data = ET.SubElement(hxml, "data")
-        dataset = ET.SubElement(data, "dataset")
-        ET.SubElement(dataset, "shortDataSetDesc").text = "Mic Sensitivity Sweep"
-        ET.SubElement(dataset, "longDataSetDesc").text = "Frequency response sweep measurement"
-        ET.SubElement(dataset, "acpEarhookType").text = "None"
+        print(f"✅ RDStarter-compatible .hxml saved to '{EXPORT_FILE}'")
 
-        # <v-curvedata>
-        curvedata = ET.SubElement(dataset, "v-curvedata")
-        for x, y in zip(x_vals, y_vals):
-            point = ET.SubElement(curvedata, "point")
-            ET.SubElement(point, "x").text = str(x)
-            ET.SubElement(point, "y").text = str(y)
-
-        # <environment />
-        ET.SubElement(hxml, "environment")
-
-        # Write to file
-        tree = ET.ElementTree(hxml)
-        tree.write(EXPORT_FILE, encoding="utf-8", xml_declaration=True)
-        print(f"✅ Trace data exported to '{EXPORT_FILE}'")
-
-        # Plot the graph
+        # Step 2: Plot
         plt.figure(figsize=(10, 6))
         plt.plot(x_vals, y_vals)
         plt.title("Sweep Measurement Result")
@@ -196,6 +199,7 @@ def fetch_and_plot_trace(upv):
 
     except Exception as e:
         print(f"❌ Failed to fetch or plot trace: {e}")
+
 
 
 
