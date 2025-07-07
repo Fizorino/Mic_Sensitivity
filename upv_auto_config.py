@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
+import xml.etree.ElementTree as ET
 
 CONFIG_FILE = "config.json"
 SETTINGS_FILE = "settings.json"
@@ -135,34 +136,55 @@ def apply_grouped_settings(upv, config_file=SETTINGS_FILE):
         else:
             print(f"⚠️ Section '{section}' not found in settings.")
 
+
+
 def fetch_and_plot_trace(upv):
     try:
         print("📊 Fetching Sweep trace data directly from UPV...")
 
+        # Query X and Y data from UPV
         x_raw = upv.query("TRAC:SWE1:LOAD:AX?")
         y_raw = upv.query("TRAC:SWE1:LOAD:AY?")
         x_vals = np.fromstring(x_raw, sep=',')
         y_vals = np.fromstring(y_raw, sep=',')
 
-        # Save to HXML (R&S-compatible format)
-        with open(EXPORT_FILE, "w", encoding="utf-8") as f:
-            f.write('<?xml version="1.0" encoding="utf-8"?>\n')
-            f.write("<Root>\n")
-            f.write("  <Measurement>\n")
-            f.write("    <Sweep>\n")
-            f.write("      <Trace>\n")
-            f.write("        <Data>\n")
-            f.write('          <X unit="Hz">' + ",".join(f"{x:.6f}" for x in x_vals) + "</X>\n")
-            f.write('          <Y unit="dBV">' + ",".join(f"{y:.6f}" for y in y_vals) + "</Y>\n")
-            f.write("        </Data>\n")
-            f.write("      </Trace>\n")
-            f.write("    </Sweep>\n")
-            f.write("  </Measurement>\n")
-            f.write("</Root>\n")
+        if len(x_vals) != len(y_vals):
+            raise ValueError("Mismatch between X and Y data lengths")
 
-        print(f"✅ Trace data saved to '{EXPORT_FILE}'")
+        # Construct XML structure
+        hxml = ET.Element("hxml")
 
-        # Plot
+        # <head><Document>...</Document></head>
+        head = ET.SubElement(hxml, "head")
+        doc = ET.SubElement(head, "Document")
+        ET.SubElement(doc, "DataType").text = "curve"
+        ET.SubElement(doc, "DataVersion").text = "1.0"
+        ET.SubElement(doc, "PlatformVersion").text = "1.0"
+        ET.SubElement(doc, "LDocNode").text = "default"
+
+        # <data><dataset>...</dataset></data>
+        data = ET.SubElement(hxml, "data")
+        dataset = ET.SubElement(data, "dataset")
+        ET.SubElement(dataset, "shortDataSetDesc").text = "Mic Sensitivity Sweep"
+        ET.SubElement(dataset, "longDataSetDesc").text = "Frequency response sweep measurement"
+        ET.SubElement(dataset, "acpEarhookType").text = "None"
+
+        # <v-curvedata>
+        curvedata = ET.SubElement(dataset, "v-curvedata")
+        for x, y in zip(x_vals, y_vals):
+            point = ET.SubElement(curvedata, "point")
+            ET.SubElement(point, "x").text = str(x)
+            ET.SubElement(point, "y").text = str(y)
+
+        # <environment />
+        ET.SubElement(hxml, "environment")
+
+        # Write to file
+        tree = ET.ElementTree(hxml)
+        tree.write(EXPORT_FILE, encoding="utf-8", xml_declaration=True)
+        print(f"✅ Trace data exported to '{EXPORT_FILE}'")
+
+        # Plot the graph
         plt.figure(figsize=(10, 6))
         plt.plot(x_vals, y_vals)
         plt.title("Sweep Measurement Result")
@@ -174,6 +196,7 @@ def fetch_and_plot_trace(upv):
 
     except Exception as e:
         print(f"❌ Failed to fetch or plot trace: {e}")
+
 
 
 def main():
