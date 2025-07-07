@@ -13,7 +13,7 @@
   },
 
   "Generator Function": {
-    "Function": "SIN",
+    "Function Generator": "SIN",
     "Low Dist": "OFF",
     "Sweep Ctrl": "ASW",
     "Next Step": "ASYN",
@@ -31,10 +31,10 @@
   },
 
   "Analyzer Config": {
-    "Instrument Analog": "ANLG",
-    "Channel Analog": "CH1",
+    "Instrument Analyzer": "ANLG",
+    "Channel Analyzer": "CH1",
     "CH1 Coupling": "AC",
-    "Bandwidth Analog": "B22",
+    "Bandwidth Analyzer": "B22",
     "Pre Filter": "UFIL1",
     "CH1 Input": "BAL",
     "CH1 Impedance": "R200K",
@@ -48,7 +48,7 @@
   },
 
   "Analyzer Function": {
-    "Function": "RMS",
+    "Function Analyzer": "RMS",
     "S/N Sequence": "OFF",
     "Meas Time": "GENT",
     "Notch(Gain)": "OFF",

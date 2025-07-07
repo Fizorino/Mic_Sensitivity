@@ -56,7 +56,7 @@ def apply_grouped_settings(upv, config_file=SETTINGS_FILE):
         "Ref Voltage"              : "SOUR:VOLT:REF",
         "Ref Frequency"            : "SOUR:FREQ:REF",
 
-        "Function"                 : "SOUR:FUNC",
+        "Function Generator"       : "SOUR:FUNC",
         "Low Dist"                 : "SOUR:LOWD",
         "Sweep Ctrl"               : "SOUR:SWE:CONT",
         "Next Step"                : "SOUR:SWE:NEXT",
@@ -72,10 +72,10 @@ def apply_grouped_settings(upv, config_file=SETTINGS_FILE):
         "Equalizer"                : "SOUR:VOLT:",
         "DC Offset"                : "SOUR:VOLT:OFFS:STAT",
 
-        "Instrument Analog"        : "INST2",
-        "Channel Analog"           : "INP1:CHAN",
+        "Instrument Analyzer"      : "INST2",
+        "Channel Analyzer"         : "INP1:CHAN",
         "CH1 Coupling"             : "INP1:COUP",
-        "Bandwidth Analog"         : "INP1:BAND:MODE",
+        "Bandwidth Analyzer"       : "INP1:BAND:MODE",
         "Pre Filter"               : "INP1:FILT",
         "CH1 Input"                : "INP1:TYPE",
         "CH1 Impedance"            : "INP1:IMP",
@@ -87,7 +87,7 @@ def apply_grouped_settings(upv, config_file=SETTINGS_FILE):
         "Play bef.Meas"            : "TRIG:PLAY",
         "MAX FFT Size"             : "SENS1:MAX:FFT:SIZE",
 
-        "Function"                 : "SENS:FUNC",
+        "Function Analyzer"        : "SENS:FUNC",
         "S/N Sequence"             : "SENS1:FUNC:SNS",
         "Meas Time"                : "SENS1:FUNC:APER:MODE",
         "Notch(Gain)"              : "SENS1:NOTCh",
