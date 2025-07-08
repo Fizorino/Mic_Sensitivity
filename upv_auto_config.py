@@ -209,6 +209,32 @@ def fetch_and_plot_trace(upv, export_path="sweep_trace.hxml"):
     except Exception as e:
         print(f"❌ Failed to fetch or plot trace: {e}")
 
+def check_upv_status(upv):
+    print("\n🛠 Checking UPV status...")
+
+    try:
+        oper = int(upv.query("STAT:OPER:COND?"))
+        ques = int(upv.query("STAT:QUES:COND?"))
+        over = int(upv.query("STAT:QUES:OVER:COND?"))
+        under = int(upv.query("STAT:QUES:UND:COND?"))
+
+        print(f"📟 Operation Status: {oper}")
+        print(f"⚠️ Questionable Status: {ques}")
+        print(f"🚨 Overrange (Overload): {over}")
+        print(f"📉 Underrange: {under}")
+
+        if over != 0:
+            print("❗ Overrange detected — generator likely overloaded. Try reducing output voltage.")
+        elif under != 0:
+            print("❗ Underrange detected — signal level may be too low.")
+        elif ques != 0:
+            print("⚠️ Other questionable condition detected. Inspect individual status bits.")
+        else:
+            print("✅ UPV reports normal status.")
+    except Exception as e:
+        print(f"❌ Failed to query UPV status: {e}")
+
+
 def main():
     rm = pyvisa.ResourceManager()
     visa_address = load_config()
@@ -273,6 +299,9 @@ def main():
     if not export_path:
         print("❌ Save cancelled. No file selected.")
         return
+    
+    # STEP 7: Check status
+    check_upv_status(upv)
 
     # STEP 7: Fetch and plot
     fetch_and_plot_trace(upv, export_path)
