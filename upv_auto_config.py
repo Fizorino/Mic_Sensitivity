@@ -250,7 +250,7 @@ def main():
 
     # STEP 3: Setup for single sweep
     print("\n⚙️ Preparing for single sweep...")
-    # upv.write("*CLS")
+    upv.write("OUTP ON")
     upv.write("INIT:CONT OFF")
     # print("🧹 Old sweep data cleared.")
 
