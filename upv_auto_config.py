@@ -52,7 +52,7 @@ def get_save_path_from_dialog():
         title="Save .hxml File As",
         defaultextension=".hxml",
         filetypes=[("HXML files", "*.hxml"), ("All files", "*.*")],
-        initialfile="sweep_trace.hxml"
+        initialfile=""
     )
     return file_path
 
@@ -186,7 +186,7 @@ def fetch_and_plot_trace(upv, export_path="sweep_trace.hxml"):
             f.write("      <shortDataSetDesc/>\n")
             f.write("      <acpEarhookType/>\n")
             f.write("      <v-curvedata>\n")
-            f.write(f"        <curvedata CurveDataName=\"LevelSweep\" MeasurementDate=\"{now}\"\n")
+            f.write(f"        <curvedata CurveDataName=\"Mic_Sensitivity\" MeasurementDate=\"{now}\"\n")
             f.write("                   TestEquipmentNr=\"UPV_Audio_Analyzer\"\n")
             f.write("                   Tester=\"PythonApp\">\n")
             f.write("          <longCurveDesc/>\n")
@@ -259,9 +259,9 @@ def main():
 
     # STEP 4: Setup for single sweep
     print("\n⚙️ Preparing for single sweep...")
-    upv.write("*CLS")
+    # upv.write("*CLS")
     upv.write("INIT:CONT OFF")
-    print("🧹 Old sweep data cleared.")
+    # print("🧹 Old sweep data cleared.")
 
     # STEP 5: Start sweep
     print("▶️ Starting single sweep...")
