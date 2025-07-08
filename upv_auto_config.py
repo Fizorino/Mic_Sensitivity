@@ -7,14 +7,13 @@ import numpy as np
 import xml.etree.ElementTree as ET
 import tkinter as tk
 from tkinter import filedialog
-
+import datetime
 
 CONFIG_FILE = "config.json"
 SETTINGS_FILE = "settings.json"
-SET_FILE_NAME = "C:\\Documents and Settings\\instrument\\Desktop\\COP_Sensitivity.set"
-SET_FILE_PATH_ON_UPV = f"{SET_FILE_NAME}"
+# SET_FILE_NAME = "C:\\Documents and Settings\\instrument\\Desktop\\COP_Sensitivity.set"
 
-EXPORT_FILE = "sweep_trace.hxml"
+#EXPORT_FILE = "sweep_trace.hxml"
 
 def find_upv_ip():
     rm = pyvisa.ResourceManager()
@@ -151,10 +150,6 @@ def apply_grouped_settings(upv, config_file=SETTINGS_FILE):
         else:
             print(f"⚠️ Section '{section}' not found in settings.")
 
-
-
-import datetime
-
 def fetch_and_plot_trace(upv, export_path="sweep_trace.hxml"):
     try:
         print("📊 Fetching Sweep trace data directly from UPV...")
@@ -199,7 +194,7 @@ def fetch_and_plot_trace(upv, export_path="sweep_trace.hxml"):
             f.write("  </data>\n")
             f.write("</hxml>\n")
 
-        print(f"✅ RDStarter-compatible .hxml saved to '{export_path}'")
+        print(f"✅ File saved to '{export_path}'")
 
         # Step 2: Plot
         plt.figure(figsize=(10, 6))
@@ -250,24 +245,20 @@ def main():
             print("❌ Failed to connect to newly found UPV:", e)
             return
 
-    # STEP 2: Load setup
-    print(f"\n📂 Loading setup file from UPV: {SET_FILE_PATH_ON_UPV}")
-    upv.write(f'SYST:SET:LOAD "{SET_FILE_PATH_ON_UPV}"')
-
-    # STEP 3: Apply grouped settings
+    # STEP 2: Apply grouped settings
     apply_grouped_settings(upv)
 
-    # STEP 4: Setup for single sweep
+    # STEP 3: Setup for single sweep
     print("\n⚙️ Preparing for single sweep...")
     # upv.write("*CLS")
     upv.write("INIT:CONT OFF")
     # print("🧹 Old sweep data cleared.")
 
-    # STEP 5: Start sweep
+    # STEP 4: Start sweep
     print("▶️ Starting single sweep...")
     upv.write("INIT")
 
-    # STEP 6: Wait for completion
+    # STEP 5: Wait for completion
     print("⏳ Waiting for sweep to complete (using *OPC?)...")
     upv.timeout = 20000
     try:
@@ -277,17 +268,15 @@ def main():
         print(f"❌ Failed while waiting for sweep: {e}")
         return
 
-    # STEP 7: Save As dialog
+    # STEP 6: Save As dialog
     export_path = get_save_path_from_dialog()
     if not export_path:
         print("❌ Save cancelled. No file selected.")
         return
 
-    # STEP 8: Fetch and plot
+    # STEP 7: Fetch and plot
     fetch_and_plot_trace(upv, export_path)
 
 
 if __name__ == "__main__":
     main()
-
-#error while loading files. No files to plot: Dot indexing is not supported for variables of this type.
