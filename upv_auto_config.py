@@ -196,15 +196,16 @@ def fetch_and_plot_trace(upv, export_path="sweep_trace.hxml"):
 
         print(f"✅ File saved to '{export_path}'")
 
-        # Step 2: Plot
+       # Step 2: Plot (Logarithmic X-Axis)
         plt.figure(figsize=(10, 6))
-        plt.plot(x_vals, y_vals)
+        plt.semilogx(x_vals, y_vals)  # 👈 Use semilogx for log-scaled frequency
         plt.title("Sweep Measurement Result")
         plt.xlabel("Frequency (Hz)")
         plt.ylabel("Level (dBV)")
-        plt.grid(True)
+        plt.grid(True, which="both", ls="--", linewidth=0.5)
         plt.tight_layout()
         plt.show()
+
 
     except Exception as e:
         print(f"❌ Failed to fetch or plot trace: {e}")
