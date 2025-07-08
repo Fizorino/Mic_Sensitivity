@@ -5,6 +5,9 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import xml.etree.ElementTree as ET
+import tkinter as tk
+from tkinter import filedialog
+
 
 CONFIG_FILE = "config.json"
 SETTINGS_FILE = "settings.json"
@@ -41,6 +44,18 @@ def load_config():
         with open(CONFIG_FILE, "r") as f:
             return json.load(f).get("visa_address")
     return None
+
+def get_save_path_from_dialog():
+    root = tk.Tk()
+    root.withdraw()  # Hide the empty main window
+    file_path = filedialog.asksaveasfilename(
+        title="Save .hxml File As",
+        defaultextension=".hxml",
+        filetypes=[("HXML files", "*.hxml"), ("All files", "*.*")],
+        initialfile="sweep_trace.hxml"
+    )
+    return file_path
+
 
 def apply_grouped_settings(upv, config_file=SETTINGS_FILE):
     if not Path(config_file).exists():
@@ -140,7 +155,7 @@ def apply_grouped_settings(upv, config_file=SETTINGS_FILE):
 
 import datetime
 
-def fetch_and_plot_trace(upv):
+def fetch_and_plot_trace(upv, export_path="sweep_trace.hxml"):
     try:
         print("📊 Fetching Sweep trace data directly from UPV...")
 
@@ -154,8 +169,7 @@ def fetch_and_plot_trace(upv):
 
         now = datetime.datetime.now().strftime("%d-%b-%Y %H:%M:%S")
 
-        # Step 1: Write the RDStarter-compatible XML
-        with open(EXPORT_FILE, "w", encoding="utf-8") as f:
+        with open(export_path, "w", encoding="utf-8") as f:
             f.write('<?xml version="1.0" encoding="utf-8"?>\n')
             f.write("<hxml>\n")
             f.write("  <head>\n")
@@ -185,7 +199,7 @@ def fetch_and_plot_trace(upv):
             f.write("  </data>\n")
             f.write("</hxml>\n")
 
-        print(f"✅ RDStarter-compatible .hxml saved to '{EXPORT_FILE}'")
+        print(f"✅ RDStarter-compatible .hxml saved to '{export_path}'")
 
         # Step 2: Plot
         plt.figure(figsize=(10, 6))
@@ -199,9 +213,6 @@ def fetch_and_plot_trace(upv):
 
     except Exception as e:
         print(f"❌ Failed to fetch or plot trace: {e}")
-
-
-
 
 def main():
     rm = pyvisa.ResourceManager()
@@ -248,27 +259,32 @@ def main():
 
     # STEP 4: Setup for single sweep
     print("\n⚙️ Preparing for single sweep...")
-    upv.write("*CLS")  # Clear any prior errors/events
-    upv.write("INIT:CONT OFF")  # Set to single sweep mode
-    # upv.write("TRAC:SWE1:CLE")  # Clear previous sweep data
+    upv.write("*CLS")
+    upv.write("INIT:CONT OFF")
     print("🧹 Old sweep data cleared.")
 
     # STEP 5: Start sweep
     print("▶️ Starting single sweep...")
-    upv.write("INIT")  # Start sweep
+    upv.write("INIT")
 
     # STEP 6: Wait for completion
     print("⏳ Waiting for sweep to complete (using *OPC?)...")
-    upv.timeout = 20000  # Increase timeout to 20 seconds
+    upv.timeout = 20000
     try:
-        upv.query("*OPC?")  # This blocks until sweep is done
+        upv.query("*OPC?")
         print("✔️ Sweep completed successfully.")
     except Exception as e:
         print(f"❌ Failed while waiting for sweep: {e}")
         return
 
-    # STEP 7: Fetch and plot data
-    fetch_and_plot_trace(upv)
+    # STEP 7: Save As dialog
+    export_path = get_save_path_from_dialog()
+    if not export_path:
+        print("❌ Save cancelled. No file selected.")
+        return
+
+    # STEP 8: Fetch and plot
+    fetch_and_plot_trace(upv, export_path)
 
 
 if __name__ == "__main__":
