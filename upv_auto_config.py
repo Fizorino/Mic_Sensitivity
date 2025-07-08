@@ -91,7 +91,7 @@ def apply_grouped_settings(upv, config_file=SETTINGS_FILE):
             "Halt"                      : "SOUR:SWE:FREQ:HALT",
             "Voltage"                   : "SOUR:VOLT",
             "Filter"                    : "SOUR:FILT",
-            "Equalizer"                 : "SOUR:VOLT:",
+            "Equalizer"                 : "SOUR:VOLT:EQU",
             "DC Offset"                 : "SOUR:VOLT:OFFS:STAT",
         },
         "Analyzer Config": {
