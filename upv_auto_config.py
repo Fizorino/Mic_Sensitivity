@@ -4,7 +4,6 @@ import time
 from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
-import xml.etree.ElementTree as ET
 import tkinter as tk
 from tkinter import filedialog
 import datetime
