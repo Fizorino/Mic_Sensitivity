@@ -1,6 +1,6 @@
 import pyvisa
 import json
-import time
+# /import time
 from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
@@ -255,7 +255,7 @@ def main():
     upv.write("INIT")
 
     # STEP 5: Wait for completion
-    print("⏳ Waiting for sweep to completetest...")
+    print("⏳ Waiting for sweep to complete test...")
     upv.timeout = 20000
     try:
         upv.query("*OPC?")
