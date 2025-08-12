@@ -1,1 +1,1 @@
-{"visa_address": "GPIB0::20::INSTR"}
+{"visa_address": "TCPIP0::169.254.233.183::inst0::INSTR"}
