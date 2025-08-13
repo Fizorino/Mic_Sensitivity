@@ -1,0 +1,4 @@
+pyvisa
+matplotlib
+numpy
+tkinter

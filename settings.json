@@ -4,14 +4,13 @@
     "Channel Generator": "CH1",
     "Output Type (Unbal/Bal)": "UNB",
     "Impedance": "R5",
-    "Common (Float/Ground)" : "GRO",
+    "Common (Float/Ground)": "GRO",
     "Bandwidth Generator": "B22",
     "Volt Range (Auto/Fix)": "AUTO",
     "Max Voltage": "10",
-    "Ref Voltage" : "-91.15 dBV",
+    "Ref Voltage": "-91.15 dBV",
     "Ref Frequency": "1000"
   },
-
   "Generator Function": {
     "Function Generator": "SIN",
     "Low Dist": "OFF",
@@ -29,7 +28,6 @@
     "Equalizer": "ON",
     "DC Offset": "OFF"
   },
-
   "Analyzer Config": {
     "Instrument Analyzer": "ANLG",
     "Channel Analyzer": "CH1",
@@ -46,7 +44,6 @@
     "Play bef.Meas": "OFF",
     "MAX FFT Size": "S256K"
   },
-
   "Analyzer Function": {
     "Function Analyzer": "RMS",
     "S/N Sequence": "OFF",
