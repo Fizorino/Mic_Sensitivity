@@ -11,7 +11,7 @@ import datetime
 CONFIG_FILE = "config.json"
 SETTINGS_FILE = "settings.json"
 
-# --- MOVE THIS OUTSIDE THE FUNCTION ---
+# SCPI command groups for each section
 command_groups = {
     "Generator Config": {
         "Instrument Generator"      : "INST1",
@@ -43,7 +43,7 @@ command_groups = {
         "DC Offset"                 : "SOUR:VOLT:OFFS:STAT",
     },
     "Analyzer Config": {
-        "Instrument Analyzer"       : "INST2",
+        "Instrument Analyzer"       : "#INST2",
         "Channel Analyzer"          : "INP1:CHAN",
         "CH1 Coupling"              : "INP1:COUP",
         "Bandwidth Analyzer"        : "INP1:BAND:MODE",
@@ -80,14 +80,14 @@ command_groups = {
         "Waveform"                  : "SENSE7:FUNCtion",
     }
 }
-# --- END MOVE ---
+
+# --- Utility Functions ---
 
 def find_upv_ip():
+    """Scan VISA resources for UPV and return its address."""
     rm = pyvisa.ResourceManager()
-    resources = rm.list_resources()
     print("🔍 Scanning VISA resources for UPV...")
-
-    for res in resources:
+    for res in rm.list_resources():
         try:
             inst = rm.open_resource(res)
             idn = inst.query("*IDN?").strip()
@@ -97,23 +97,25 @@ def find_upv_ip():
                 return res
         except Exception:
             pass
-
     print("❌ UPV not found on the network.")
     return None
 
 def save_config(visa_address):
+    """Save the VISA address to config file."""
     with open(CONFIG_FILE, "w") as f:
         json.dump({"visa_address": visa_address}, f)
 
 def load_config():
+    """Load the VISA address from config file."""
     if Path(CONFIG_FILE).exists():
         with open(CONFIG_FILE, "r") as f:
             return json.load(f).get("visa_address")
     return None
 
 def get_save_path_from_dialog():
+    """Show a file dialog to get the export path for .hxml file."""
     root = tk.Tk()
-    root.withdraw()  # Hide the empty main window
+    root.withdraw()
     file_path = filedialog.asksaveasfilename(
         title="Save .hxml File As",
         defaultextension=".hxml",
@@ -122,8 +124,8 @@ def get_save_path_from_dialog():
     )
     return file_path
 
-
 def apply_grouped_settings(upv, config_file=SETTINGS_FILE):
+    """Apply grouped settings from JSON to the UPV instrument."""
     if not Path(config_file).exists():
         print(f"⚠️ Settings file '{config_file}' not found.")
         return
@@ -149,6 +151,7 @@ def apply_grouped_settings(upv, config_file=SETTINGS_FILE):
             print(f"⚠️ Section '{section}' not found in settings.")
 
 def fetch_and_plot_trace(upv, export_path="sweep_trace.hxml"):
+    """Fetch sweep trace data from UPV, save as .hxml, and plot."""
     try:
         print("📊 Fetching Sweep trace data directly from UPV...")
 
@@ -194,9 +197,9 @@ def fetch_and_plot_trace(upv, export_path="sweep_trace.hxml"):
 
         print(f"✅ File saved to '{export_path}'")
 
-       # Step 2: Plot (Logarithmic X-Axis)
+        # Plot (Logarithmic X-Axis)
         plt.figure(figsize=(10, 6))
-        plt.semilogx(x_vals, y_vals)  # 👈 Use semilogx for log-scaled frequency
+        plt.semilogx(x_vals, y_vals)
         plt.title("Sweep Measurement Result")
         plt.xlabel("Frequency (Hz)")
         plt.ylabel("Level (dBV)")
@@ -204,9 +207,10 @@ def fetch_and_plot_trace(upv, export_path="sweep_trace.hxml"):
         plt.tight_layout()
         plt.show()
 
-
     except Exception as e:
         print(f"❌ Failed to fetch or plot trace: {e}")
+
+# --- Main Routine ---
 
 def main():
     rm = pyvisa.ResourceManager()
@@ -274,7 +278,6 @@ def main():
 
     # STEP 7: Fetch and plot
     fetch_and_plot_trace(upv, export_path)
-
 
 if __name__ == "__main__":
     main()

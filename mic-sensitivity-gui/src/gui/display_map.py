@@ -72,21 +72,15 @@ CHANNEL_GENERATOR_OPTIONS = {
 
 OUTPUT_TYPE_OPTIONS = {
     "UNB": "Unbal",
-    "BAL": "Bal",
+    "BAL": "Bal"
 }
-
-IMPEDANCE_OPTIONS = {
-    "R5": "5 Ohm",
-    "R10": "10 Ohm",
-    "R200": "200 Ohm",
-    "R600": "600 Ohm",
+IMPEDANCE_OPTIONS_BAL = {
+    "R10": "10 Ω",
+    "R200": "200 Ω",
+    "R600": "600 Ω"
 }
-
-IMPEDANCE_OPTIONS = {
-    "R5": "5 Ohm",
-    "R10": "10 Ohm",
-    "R200": "200 Ohm",
-    "R600": "600 Ohm",
+IMPEDANCE_OPTIONS_UNBAL = {
+    "R5": "5 Ω"
 }
 
 COMMON_OPTIONS = {
