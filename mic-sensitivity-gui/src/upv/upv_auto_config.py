@@ -83,21 +83,34 @@ command_groups = {
 
 # --- Utility Functions ---
 
-def find_upv_ip():
-    """Scan VISA resources for UPV and return its address."""
+def find_upv_ip(status_callback=None):
+    """Scan VISA resources for UPV via LAN or USB and return its address."""
+    def log(msg):
+        if status_callback:
+            status_callback(msg)
+        else:
+            print(msg)
     rm = pyvisa.ResourceManager()
-    print("🔍 Scanning VISA resources for UPV...")
+    log("🔍 Scanning VISA resources for UPV (LAN/USB)...")
+    found = []
     for res in rm.list_resources():
         try:
             inst = rm.open_resource(res)
             idn = inst.query("*IDN?").strip()
             if "UPV" in idn:
-                print(f"✅ Found UPV: {idn}")
-                save_config(res)
-                return res
+                if "TCPIP" in res:
+                    log(f"✅ Found UPV via LAN: {idn} ({res})")
+                elif "USB" in res:
+                    log(f"✅ Found UPV via USB: {idn} ({res})")
+                else:
+                    log(f"✅ Found UPV: {idn} ({res})")
+                found.append(res)
         except Exception:
             pass
-    print("❌ UPV not found on the network.")
+    if found:
+        save_config(found[0])
+        return found[0]
+    log("❌ UPV not found on LAN or USB.")
     return None
 
 def save_config(visa_address):
@@ -232,12 +245,13 @@ def main():
                     print("🔁 Retrying in 1.5 seconds...")
                     time.sleep(1.5)
                 else:
-                    print("❌ Saved address failed. Searching for a new UPV...")
+                    print("❌ Saved address failed. Searching for a new UPV (LAN/USB)...")
                     visa_address = None
 
     if not visa_address:
         visa_address = find_upv_ip()
         if not visa_address:
+            print("❌ No UPV found. Please check LAN/USB connection and power.")
             return
         try:
             upv = rm.open_resource(visa_address)

@@ -492,28 +492,53 @@ class MainWindow(Frame):
             messagebox.showerror("Save Error", f"Could not save settings: {e}")
 
     def connect_to_upv(self):
+        def status_callback(msg):
+            # Show last message in status_label and also append to a log if you want
+            self.status_label.config(text=msg)
+            self.status_label.update_idletasks()
+
         visa_address = load_config()
+        rm = pyvisa.ResourceManager()
+        self.status_label.config(text="Connecting to UPV...")
+        self.status_label.update_idletasks()
+        self.upv = None
+
         if visa_address:
-            try:
-                rm = pyvisa.ResourceManager()
-                self.upv = rm.open_resource(visa_address)
-                self.upv.timeout = 5000
-                self.status_label.config(text=f"Connected to: {self.upv.query('*IDN?').strip()}")
-            except Exception as e:
-                messagebox.showerror("Connection Error", str(e))
-                self.upv = None
-        else:
-            visa_address = find_upv_ip()
-            if visa_address:
+            for attempt in range(2):
                 try:
-                    rm = pyvisa.ResourceManager()
-                    self.upv = rm.open_resource(visa_address)
-                    self.upv.timeout = 5000
-                    save_config(visa_address)
-                    self.status_label.config(text=f"Connected to: {self.upv.query('*IDN?').strip()}")
+                    status_callback(f"🔌 Trying saved UPV address: {visa_address}")
+                    upv = rm.open_resource(visa_address)
+                    upv.timeout = 5000
+                    idn = upv.query("*IDN?").strip()
+                    status_callback(f"✅ Connected to: {idn}")
+                    self.upv = upv
+                    return
                 except Exception as e:
-                    messagebox.showerror("Connection Error", str(e))
-                    self.upv = None
+                    status_callback(f"⚠️ Attempt {attempt+1} failed: {e}")
+                    if attempt == 0:
+                        status_callback("🔁 Retrying in 1.5 seconds...")
+                        self.status_label.update_idletasks()
+                        self.after(1500)
+                    else:
+                        status_callback("❌ Saved address failed. Searching for a new UPV (LAN/USB)...")
+                        visa_address = None
+
+        if not visa_address:
+            visa_address = find_upv_ip(status_callback)
+            if not visa_address:
+                status_callback("❌ No UPV found. Please check LAN/USB connection and power.")
+                self.upv = None
+                return
+            try:
+                upv = rm.open_resource(visa_address)
+                upv.timeout = 5000
+                idn = upv.query("*IDN?").strip()
+                status_callback(f"✅ Connected to new UPV: {idn}")
+                save_config(visa_address)
+                self.upv = upv
+            except Exception as e:
+                status_callback(f"❌ Failed to connect to newly found UPV: {e}")
+                self.upv = None
 
     def apply_settings(self):
         try:
