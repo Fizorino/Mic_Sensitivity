@@ -32,7 +32,7 @@ command_groups = {
         "Next Step"                 : "SOUR:SWE:NEXT",
         "X Axis"                    : "SOUR:SWE:XAX",
         "Z Axis"                    : "SOUR:SWE:ZAX",
-        "Frequency"                 : "SOUR:SWE:FREQ:SPAC",
+        "Spacing"                   : "SOUR:SWE:FREQ:SPAC",
         "Start"                     : "SOUR:SWE:FREQ:STAR",
         "Stop"                      : "SOUR:SWE:FREQ:STOP",
         "Points"                    : "SOUR:SWE:FREQ:POIN",

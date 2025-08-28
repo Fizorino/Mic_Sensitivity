@@ -48,11 +48,27 @@ DISPLAY_MAP = {
     "MOD": "Modulation",
     "DC": "DC",
     "SQU": "Square",
-    "CHIO": "Chirp"
+    "CHIR": "Chirp",
 
-    
+    "OFF": "Off",
+    "ON": "On",
 
+    "ASW": "Auto Sweep",
+    "ALIS": "Auto List",
+
+    "DWELl": "Dwell Value",
+    "ASYNc": "Anlr Sync",
+    "LIST": "Dwell File",
+
+    "VOLT": "Voltage",
+    "FREQ": "Frequency",
+
+    "LINPoints": "Lin Points",
+    "LINSteps": "Lin Steps",
+    "LOGPoints": "Log Points",
+    "LOGP": "Log Steps"
 }
+
 
 #Generator Config
 INSTRUMENT_GENERATOR_OPTIONS = {
@@ -126,3 +142,34 @@ LOW_DIST_OPTIONS = {
     "OFF": "Off",
     "ON": "On"
 }
+
+SWEEP_CTRL_OPTIONS = {
+    "OFF": "Off",
+    "ASW": "Auto Sweep",
+    "ALIS": "Auto List"
+}
+
+NEXT_STEP_OPTIONS = {
+    "DWELl": "Dwell Value",
+    "ASYNc": "Anlr Sync",
+    "LIST": "Dwell File"
+}
+
+X_AXIS_OPTIONS = {
+    "VOLT": "Voltage",
+    "FREQ": "Frequency"
+}
+
+Z_AXIS_OPTIONS = {
+    "OFF": "Off",
+    "VOLT": "Voltage",
+    "FREQ": "Frequency"
+}
+
+SPACING_OPTIONS = {
+    "LINPoints": "Lin Points",
+    "LINSteps": "Lin Steps",
+    "LOGPoints": "Log Points",
+    "LOGSteps": "Log Steps"
+}
+

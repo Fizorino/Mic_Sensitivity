@@ -345,16 +345,96 @@ class MainWindow(Frame):
                             else:
                                 cb.deselect()
                             self.entries[(section, label)] = var
-                        elif label == "Function Generator":
+                        elif section == "Generator Function" and label == "Function Generator":
                             from gui.display_map import FUNCTION_GENERATOR_OPTIONS
                             display_values = list(FUNCTION_GENERATOR_OPTIONS.values())
                             reverse_map = {v: k for k, v in FUNCTION_GENERATOR_OPTIONS.items()}
-                            # Try to get display value from code, else use as is
-                            current_display = FUNCTION_GENERATOR_OPTIONS.get(value, FUNCTION_GENERATOR_OPTIONS.get(value.upper(), value))
+                            current_display = FUNCTION_GENERATOR_OPTIONS.get(value, value)
                             combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
                             combo.set(current_display)
                             combo.grid(row=i, column=1, sticky="w", pady=2)
                             self.entries[(section, label)] = combo
+                        elif section == "Generator Function" and label == "Sweep Ctrl":
+                            from gui.display_map import SWEEP_CTRL_OPTIONS
+                            display_values = list(SWEEP_CTRL_OPTIONS.values())
+                            reverse_map = {v: k for k, v in SWEEP_CTRL_OPTIONS.items()}
+                            current_display = SWEEP_CTRL_OPTIONS.get(value, value)
+                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
+                            combo.set(current_display)
+                            combo.grid(row=i, column=1, sticky="w", pady=2)
+                            self.entries[(section, label)] = combo
+                        elif section == "Generator Function" and label == "Next Step":
+                            from gui.display_map import NEXT_STEP_OPTIONS
+                            display_values = list(NEXT_STEP_OPTIONS.values())
+                            reverse_map = {v: k for k, v in NEXT_STEP_OPTIONS.items()}
+                            current_display = NEXT_STEP_OPTIONS.get(value, value)
+                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
+                            combo.set(current_display)
+                            combo.grid(row=i, column=1, sticky="w", pady=2)
+                            self.entries[(section, label)] = combo
+                        elif section == "Generator Function" and label == "X Axis":
+                            from gui.display_map import X_AXIS_OPTIONS
+                            display_values = list(X_AXIS_OPTIONS.values())
+                            reverse_map = {v: k for k, v in X_AXIS_OPTIONS.items()}
+                            current_display = X_AXIS_OPTIONS.get(value, value)
+                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
+                            combo.set(current_display)
+                            combo.grid(row=i, column=1, sticky="w", pady=2)
+                            self.entries[(section, label)] = combo
+                        elif section == "Generator Function" and label == "Z Axis":
+                            from gui.display_map import Z_AXIS_OPTIONS
+                            display_values = list(Z_AXIS_OPTIONS.values())
+                            reverse_map = {v: k for k, v in Z_AXIS_OPTIONS.items()}
+                            current_display = Z_AXIS_OPTIONS.get(value, value)
+                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
+                            combo.set(current_display)
+                            combo.grid(row=i, column=1, sticky="w", pady=2)
+                            self.entries[(section, label)] = combo
+                        elif section == "Generator Function" and label == "Spacing":
+                            from gui.display_map import SPACING_OPTIONS
+                            display_values = list(SPACING_OPTIONS.values())
+                            reverse_map = {v: k for k, v in SPACING_OPTIONS.items()}
+                            current_display = SPACING_OPTIONS.get(value, value)
+                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
+                            combo.set(current_display)
+                            combo.grid(row=i, column=1, sticky="w", pady=2)
+                            self.entries[(section, label)] = combo
+                        elif section == "Generator Function" and label in ("Start", "Stop"):
+                            import re
+                            unit_options = ["Hz", "kHz"]
+                            val_str = str(value)
+                            match = re.match(r"^([\-\d\.]+)\s*([a-zA-Z]+)?$", val_str)
+                            if match:
+                                val_part = match.group(1)
+                                unit_part = match.group(2) if match.group(2) in unit_options else unit_options[0]
+                            else:
+                                val_part = val_str
+                                unit_part = unit_options[0]
+                            hv_frame = Frame(frame)
+                            hv_frame.grid(row=i, column=1, sticky="w", pady=2)
+                            entry = Entry(hv_frame, width=22)
+                            entry.insert(0, val_part)
+                            entry.pack(side="left", padx=(0, 8))
+                            combo = ttk.Combobox(hv_frame, values=unit_options, width=6, state="readonly")
+                            combo.set(unit_part)
+                            combo.pack(side="left")
+                            def convert_freq_unit(event=None, entry=entry, combo=combo):
+                                try:
+                                    val = float(entry.get())
+                                except Exception:
+                                    return
+                                old_unit = getattr(combo, '_last_unit', unit_part)
+                                new_unit = combo.get()
+                                scale = {"Hz": 1, "kHz": 1e3}
+                                if old_unit in scale and new_unit in scale:
+                                    val_si = val * scale[old_unit]
+                                    new_val = val_si / scale[new_unit]
+                                    entry.delete(0, 'end')
+                                    entry.insert(0, str(int(new_val) if new_val.is_integer() else round(new_val, 6)))
+                                combo._last_unit = new_unit
+                            combo._last_unit = unit_part
+                            combo.bind('<<ComboboxSelected>>', convert_freq_unit)
+                            self.entries[(section, label)] = (entry, combo)
                         else:
                             entry = Entry(frame, width=22)
                             entry.insert(0, str(value))
@@ -404,14 +484,7 @@ class MainWindow(Frame):
                 settings = json.load(f)
             for (section, label), entry in self.entries.items():
                 if section in settings and label in settings[section]:
-                    if label == "Function Generator":
-                        from gui.display_map import FUNCTION_GENERATOR_OPTIONS
-                        reverse_map = {v: k for k, v in FUNCTION_GENERATOR_OPTIONS.items()}
-                        display_value = entry.get()
-                        code_value = reverse_map.get(display_value, display_value)
-                        settings[section][label] = code_value
-                    else:
-                        settings[section][label] = entry.get()
+                    settings[section][label] = entry.get()
             with open(SETTINGS_FILE, "w") as f:
                 json.dump(settings, f, indent=2)
             self.status_label.config(text="Settings saved successfully.", fg="green")
@@ -499,6 +572,47 @@ class MainWindow(Frame):
                     settings[section][label] = f"{val} {unit}" if val else ""
                 elif label == "Low Dist":
                     settings[section][label] = widget.get()
+                elif section == "Generator Function" and label == "Function Generator":
+                    from gui.display_map import FUNCTION_GENERATOR_OPTIONS
+                    reverse_map = {v: k for k, v in FUNCTION_GENERATOR_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_map.get(display_value, display_value)
+                    settings[section][label] = code_value
+                elif section == "Generator Function" and label == "Sweep Ctrl":
+                    from gui.display_map import SWEEP_CTRL_OPTIONS
+                    reverse_map = {v: k for k, v in SWEEP_CTRL_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_map.get(display_value, display_value)
+                    settings[section][label] = code_value
+                elif section == "Generator Function" and label == "Next Step":
+                    from gui.display_map import NEXT_STEP_OPTIONS
+                    reverse_map = {v: k for k, v in NEXT_STEP_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_map.get(display_value, display_value)
+                    settings[section][label] = code_value
+                elif section == "Generator Function" and label == "X Axis":
+                    from gui.display_map import X_AXIS_OPTIONS
+                    reverse_map = {v: k for k, v in X_AXIS_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_map.get(display_value, display_value)
+                    settings[section][label] = code_value
+                elif section == "Generator Function" and label == "Z Axis":
+                    from gui.display_map import Z_AXIS_OPTIONS
+                    reverse_map = {v: k for k, v in Z_AXIS_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_map.get(display_value, display_value)
+                    settings[section][label] = code_value
+                elif section == "Generator Function" and label == "Spacing":
+                    from gui.display_map import SPACING_OPTIONS
+                    reverse_map = {v: k for k, v in SPACING_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_map.get(display_value, display_value)
+                    settings[section][label] = code_value
+                elif section == "Generator Function" and label in ("Start", "Stop"):
+                    entry, combo = widget
+                    val = entry.get().strip()
+                    unit = combo.get().strip()
+                    settings[section][label] = f"{val} {unit}" if val else ""
                 else:
                     settings[section][label] = widget.get()
 
