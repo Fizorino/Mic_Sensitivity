@@ -14,10 +14,10 @@ DISPLAY_MAP = {
     "UNB": "Unbal",
     "BAL": "Bal",
 
-    "R5": "5 Ohm",
-    "R10": "10 Ohm",
-    "R200": "200 Ohm",
-    "R600": "600 Ohm",
+    "R5": "5 Ω",
+    "R10": "10 Ω",
+    "R200": "200 Ω",
+    "R600": "600 Ω",
 
     "GRO": "Ground",
     "FLO": "Float",
@@ -84,8 +84,8 @@ IMPEDANCE_OPTIONS_UNBAL = {
 }
 
 COMMON_OPTIONS = {
-    "GRO": "Ground",
     "FLO": "Float",
+    "GRO": "Ground",    
 }
 
 BANDWIDTH_GENERATOR_OPTIONS = {
@@ -119,25 +119,10 @@ FUNCTION_GENERATOR_OPTIONS = {
     "MOD": "Modulation",
     "DC": "DC",
     "SQU": "Square",
-    "CHIO": "Chirp"
+    "CHIR": "Chirp"
 }
 
 LOW_DIST_OPTIONS = {
-    "SIN": "Sine",
-    "STER": "Stereo Sine",
-    "MULTI": "Multisine",
-    "BURST": "Sine Burst",
-    "S2Pulse": "Sine² Pulse",
-    "MDISt": "Mod Dist",
-    "DFD": "DFD",
-    "DIM": "DIM",
-    "RANDom": "Random",
-    "ARB": "Arbitrary",
-    "PLAY": "Play",
-    "PLYA": "Play+Anlr",
-    "POL": "Polarity",
-    "MOD": "Modulation",
-    "DC": "DC",
-    "SQU": "Square",
-    "CHIO": "Chirp"
+    "OFF": "Off",
+    "ON": "On"
 }

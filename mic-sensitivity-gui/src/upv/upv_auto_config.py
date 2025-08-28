@@ -17,7 +17,7 @@ command_groups = {
         "Instrument Generator"      : "INST1",
         "Channel Generator"         : "OUTP:CHAN",
         "Output Type (Unbal/Bal)"   : "OUTP:TYPE",
-        "Impedance"                 : "OUTP:IMP:UNB?",
+        "Impedance"                 : "OUTP:IMP",
         "Common (Float/Ground)"     : "OUTP:LOW",
         "Bandwidth Generator"       : "OUTP:BAND:MODE",
         "Volt Range (Auto/Fix)"     : "SOUR:VOLT:RANG",
@@ -43,7 +43,7 @@ command_groups = {
         "DC Offset"                 : "SOUR:VOLT:OFFS:STAT",
     },
     "Analyzer Config": {
-        "Instrument Analyzer"       : "#INST2",
+        "Instrument Analyzer"       : "INST2",
         "Channel Analyzer"          : "INP1:CHAN",
         "CH1 Coupling"              : "INP1:COUP",
         "Bandwidth Analyzer"        : "INP1:BAND:MODE",
@@ -124,14 +124,14 @@ def get_save_path_from_dialog():
     )
     return file_path
 
-def apply_grouped_settings(upv, config_file=SETTINGS_FILE):
+def apply_grouped_settings(upv, data=None, config_file=SETTINGS_FILE):
     """Apply grouped settings from JSON to the UPV instrument."""
-    if not Path(config_file).exists():
-        print(f"⚠️ Settings file '{config_file}' not found.")
-        return
-
-    with open(config_file, "r") as f:
-        data = json.load(f)
+    if data is None:
+        if not Path(config_file).exists():
+            print(f"⚠️ Settings file '{config_file}' not found.")
+            return
+        with open(config_file, "r") as f:
+            data = json.load(f)
 
     for section, settings_map in command_groups.items():
         if section in data:

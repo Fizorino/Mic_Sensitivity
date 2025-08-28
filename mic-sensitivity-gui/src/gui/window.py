@@ -133,10 +133,228 @@ class MainWindow(Frame):
                             self.output_type_combo.grid(row=i, column=1, sticky="w", pady=2)
                             self.entries[("Generator Config", label)] = self.output_type_combo
                             output_type_row = i
+                        elif section == "Generator Config" and label == "Common (Float/Ground)":
+                            # Use Radiobuttons for GRO/FLO
+                            from gui.display_map import COMMON_OPTIONS
+                            import tkinter as tk
+                            self.common_var = tk.StringVar()
+                            self.common_var.set(value if value in COMMON_OPTIONS else "GRO")
+                            radio_frame = Frame(frame)
+                            radio_frame.grid(row=i, column=1, sticky="w", pady=2)
+                            for code, display in COMMON_OPTIONS.items():
+                                rb = ttk.Radiobutton(radio_frame, text=display, variable=self.common_var, value=code)
+                                rb.pack(side="left", padx=5)
+                            self.entries[("Generator Config", label)] = self.common_var
                         elif section == "Generator Config" and label == "Impedance":
                             self.impedance_row = i
                             self.impedance_frame = frame
                             impedance_value = value
+                        elif section == "Generator Config" and label == "Bandwidth Generator":
+                            from gui.display_map import BANDWIDTH_GENERATOR_OPTIONS
+                            display_values = list(BANDWIDTH_GENERATOR_OPTIONS.values())
+                            # Try to get display value from code, else use as is
+                            current_display = BANDWIDTH_GENERATOR_OPTIONS.get(value, value)
+                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
+                            combo.set(current_display)
+                            combo.grid(row=i, column=1, sticky="w", pady=2)
+                            self.entries[("Generator Config", label)] = combo
+                        elif section == "Generator Config" and label == "Volt Range (Auto/Fix)":
+                            from gui.display_map import VOLT_RANGE_OPTIONS
+                            import tkinter as tk
+                            self.volt_range_var = tk.StringVar()
+                            self.volt_range_var.set(value if value in VOLT_RANGE_OPTIONS else "AUTO")
+                            radio_frame = Frame(frame)
+                            radio_frame.grid(row=i, column=1, sticky="w", pady=2)
+                            for code, display in VOLT_RANGE_OPTIONS.items():
+                                rb = ttk.Radiobutton(radio_frame, text=display, variable=self.volt_range_var, value=code)
+                                rb.pack(side="left", padx=5)
+                            self.entries[("Generator Config", label)] = self.volt_range_var
+                        elif section == "Generator Config" and label == "Max Voltage":
+                            # Split value and unit if possible
+                            import re
+                            unit_options = ["V", "mV", "μV", "dBV", "dBu", "dBm"]
+                            val_str = str(value)
+                            match = re.match(r"^([\-\d\.]+)\s*([a-zA-Zμ]+)?$", val_str)
+                            if match:
+                                val_part = match.group(1)
+                                unit_part = match.group(2) if match.group(2) in unit_options else unit_options[0]
+                            else:
+                                val_part = val_str
+                                unit_part = unit_options[0]
+                            hv_frame = Frame(frame)
+                            hv_frame.grid(row=i, column=1, sticky="w", pady=2)
+                            entry = Entry(hv_frame, width=22)
+                            entry.insert(0, val_part)
+                            entry.pack(side="left", padx=(0, 8))
+                            combo = ttk.Combobox(hv_frame, values=unit_options, width=6, state="readonly")
+                            combo.set(unit_part)
+                            combo.pack(side="left")
+                            import math
+                            def convert_voltage_unit(event=None, entry=entry, combo=combo):
+                                try:
+                                    val = float(entry.get())
+                                except Exception:
+                                    return
+                                old_unit = getattr(combo, '_last_unit', unit_part)
+                                new_unit = combo.get()
+                                scale = {"V": 1, "mV": 1e-3, "μV": 1e-6}
+                                Z = 600  # Ohms, for dBm conversion
+                                # Convert any unit to SI volts first
+                                def to_volts(val, unit):
+                                    if unit in scale:
+                                        return val * scale[unit]
+                                    elif unit == "dBV":
+                                        return 10 ** (val / 20)
+                                    elif unit == "dBu":
+                                        return 0.775 * (10 ** (val / 20))
+                                    elif unit == "dBm":
+                                        p = 10 ** (val / 10) / 1000
+                                        return (p * Z) ** 0.5
+                                    else:
+                                        return val
+                                # Convert SI volts to any unit
+                                def from_volts(v, unit):
+                                    if unit in scale:
+                                        new_val = v / scale[unit]
+                                        return int(new_val) if new_val.is_integer() else round(new_val, 6)
+                                    elif unit == "dBV":
+                                        return round(20 * math.log10(v / 1.0), 6) if v > 0 else ""
+                                    elif unit == "dBu":
+                                        return round(20 * math.log10(v / 0.775), 6) if v > 0 else ""
+                                    elif unit == "dBm":
+                                        p = (v ** 2) / Z
+                                        return round(10 * math.log10(p * 1000), 6) if v > 0 else ""
+                                    else:
+                                        return v
+                                v_si = to_volts(val, old_unit)
+                                result = from_volts(v_si, new_unit)
+                                entry.delete(0, 'end')
+                                entry.insert(0, str(result))
+                                combo._last_unit = new_unit
+                            combo._last_unit = unit_part
+                            combo.bind('<<ComboboxSelected>>', convert_voltage_unit)
+                            self.entries[(section, label)] = (entry, combo)
+                        elif section == "Generator Config" and label == "Ref Voltage":
+                            # Same as Max Voltage: value + unit
+                            import re
+                            unit_options = ["V", "mV", "μV", "dBV", "dBu", "dBm"]
+                            val_str = str(value)
+                            match = re.match(r"^([\-\d\.]+)\s*([a-zA-Zμ]+)?$", val_str)
+                            if match:
+                                val_part = match.group(1)
+                                unit_part = match.group(2) if match.group(2) in unit_options else unit_options[0]
+                            else:
+                                val_part = val_str
+                                unit_part = unit_options[0]
+                            hv_frame = Frame(frame)
+                            hv_frame.grid(row=i, column=1, sticky="w", pady=2)
+                            entry = Entry(hv_frame, width=22)
+                            entry.insert(0, val_part)
+                            entry.pack(side="left", padx=(0, 8))
+                            combo = ttk.Combobox(hv_frame, values=unit_options, width=6, state="readonly")
+                            combo.set(unit_part)
+                            combo.pack(side="left")
+                            import math
+                            def convert_voltage_unit(event=None, entry=entry, combo=combo):
+                                try:
+                                    val = float(entry.get())
+                                except Exception:
+                                    return
+                                old_unit = getattr(combo, '_last_unit', unit_part)
+                                new_unit = combo.get()
+                                scale = {"V": 1, "mV": 1e-3, "μV": 1e-6}
+                                Z = 600  # Ohms, for dBm conversion
+                                def to_volts(val, unit):
+                                    if unit in scale:
+                                        return val * scale[unit]
+                                    elif unit == "dBV":
+                                        return 10 ** (val / 20)
+                                    elif unit == "dBu":
+                                        return 0.775 * (10 ** (val / 20))
+                                    elif unit == "dBm":
+                                        p = 10 ** (val / 10) / 1000
+                                        return (p * Z) ** 0.5
+                                    else:
+                                        return val
+                                def from_volts(v, unit):
+                                    if unit in scale:
+                                        new_val = v / scale[unit]
+                                        return int(new_val) if new_val.is_integer() else round(new_val, 6)
+                                    elif unit == "dBV":
+                                        return round(20 * math.log10(v / 1.0), 6) if v > 0 else ""
+                                    elif unit == "dBu":
+                                        return round(20 * math.log10(v / 0.775), 6) if v > 0 else ""
+                                    elif unit == "dBm":
+                                        p = (v ** 2) / Z
+                                        return round(10 * math.log10(p * 1000), 6) if v > 0 else ""
+                                    else:
+                                        return v
+                                v_si = to_volts(val, old_unit)
+                                result = from_volts(v_si, new_unit)
+                                entry.delete(0, 'end')
+                                entry.insert(0, str(result))
+                                combo._last_unit = new_unit
+                            combo._last_unit = unit_part
+                            combo.bind('<<ComboboxSelected>>', convert_voltage_unit)
+                            self.entries[(section, label)] = (entry, combo)
+                        elif section == "Generator Config" and label == "Ref Frequency":
+                            # Value + unit, only Hz and kHz
+                            import re
+                            unit_options = ["Hz", "kHz"]
+                            val_str = str(value)
+                            match = re.match(r"^([\-\d\.]+)\s*([a-zA-Z]+)?$", val_str)
+                            if match:
+                                val_part = match.group(1)
+                                unit_part = match.group(2) if match.group(2) in unit_options else unit_options[0]
+                            else:
+                                val_part = val_str
+                                unit_part = unit_options[0]
+                            hv_frame = Frame(frame)
+                            hv_frame.grid(row=i, column=1, sticky="w", pady=2)
+                            entry = Entry(hv_frame, width=22)
+                            entry.insert(0, val_part)
+                            entry.pack(side="left", padx=(0, 8))
+                            combo = ttk.Combobox(hv_frame, values=unit_options, width=6, state="readonly")
+                            combo.set(unit_part)
+                            combo.pack(side="left")
+                            def convert_freq_unit(event=None, entry=entry, combo=combo):
+                                try:
+                                    val = float(entry.get())
+                                except Exception:
+                                    return
+                                old_unit = getattr(combo, '_last_unit', unit_part)
+                                new_unit = combo.get()
+                                scale = {"Hz": 1, "kHz": 1e3}
+                                if old_unit in scale and new_unit in scale:
+                                    val_si = val * scale[old_unit]
+                                    new_val = val_si / scale[new_unit]
+                                    entry.delete(0, 'end')
+                                    entry.insert(0, str(int(new_val) if new_val.is_integer() else round(new_val, 6)))
+                                combo._last_unit = new_unit
+                            combo._last_unit = unit_part
+                            combo.bind('<<ComboboxSelected>>', convert_freq_unit)
+                            self.entries[(section, label)] = (entry, combo)
+                        elif label == "Low Dist":
+                            import tkinter as tk
+                            var = tk.StringVar()
+                            var.set("ON" if str(value).upper() == "ON" else "OFF")
+                            cb = tk.Checkbutton(frame, variable=var, onvalue="ON", offvalue="OFF")
+                            cb.grid(row=i, column=1, sticky="w", pady=2)
+                            if var.get() == "ON":
+                                cb.select()
+                            else:
+                                cb.deselect()
+                            self.entries[(section, label)] = var
+                        elif label == "Function Generator":
+                            from gui.display_map import FUNCTION_GENERATOR_OPTIONS
+                            display_values = list(FUNCTION_GENERATOR_OPTIONS.values())
+                            reverse_map = {v: k for k, v in FUNCTION_GENERATOR_OPTIONS.items()}
+                            # Try to get display value from code, else use as is
+                            current_display = FUNCTION_GENERATOR_OPTIONS.get(value, FUNCTION_GENERATOR_OPTIONS.get(value.upper(), value))
+                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
+                            combo.set(current_display)
+                            combo.grid(row=i, column=1, sticky="w", pady=2)
+                            self.entries[(section, label)] = combo
                         else:
                             entry = Entry(frame, width=22)
                             entry.insert(0, str(value))
@@ -186,7 +404,14 @@ class MainWindow(Frame):
                 settings = json.load(f)
             for (section, label), entry in self.entries.items():
                 if section in settings and label in settings[section]:
-                    settings[section][label] = entry.get()
+                    if label == "Function Generator":
+                        from gui.display_map import FUNCTION_GENERATOR_OPTIONS
+                        reverse_map = {v: k for k, v in FUNCTION_GENERATOR_OPTIONS.items()}
+                        display_value = entry.get()
+                        code_value = reverse_map.get(display_value, display_value)
+                        settings[section][label] = code_value
+                    else:
+                        settings[section][label] = entry.get()
             with open(SETTINGS_FILE, "w") as f:
                 json.dump(settings, f, indent=2)
             self.status_label.config(text="Settings saved successfully.", fg="green")
@@ -238,19 +463,60 @@ class MainWindow(Frame):
                     display_value = widget.get()
                     code_value = reverse_output_type_map.get(display_value, display_value)
                     settings[section][label] = code_value
+                elif section == "Generator Config" and label == "Common (Float/Ground)":
+                    settings[section][label] = widget.get()
+                elif section == "Generator Config" and label == "Bandwidth Generator":
+                    from gui.display_map import BANDWIDTH_GENERATOR_OPTIONS
+                    reverse_bw_map = {v: k for k, v in BANDWIDTH_GENERATOR_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_bw_map.get(display_value, display_value)
+                    settings[section][label] = code_value
+                elif section == "Generator Config" and label == "Volt Range":
+                    settings[section][label] = widget.get()
+                elif section == "Generator Config" and label == "Max Voltage":
+                    entry, combo = widget
+                    val = entry.get().strip()
+                    unit = combo.get().strip()
+                    # Convert micro symbol to ASCII 'u' for UPV compatibility
+                    if unit == "μV":
+                        unit_ascii = "uV"
+                    else:
+                        unit_ascii = unit
+                    settings[section][label] = f"{val} {unit_ascii}" if val else ""
+                elif section == "Generator Config" and label == "Ref Voltage":
+                    entry, combo = widget
+                    val = entry.get().strip()
+                    unit = combo.get().strip()
+                    if unit == "μV":
+                        unit_ascii = "uV"
+                    else:
+                        unit_ascii = unit
+                    settings[section][label] = f"{val} {unit_ascii}" if val else ""
+                elif section == "Generator Config" and label == "Ref Frequency":
+                    entry, combo = widget
+                    val = entry.get().strip()
+                    unit = combo.get().strip()
+                    settings[section][label] = f"{val} {unit}" if val else ""
+                elif label == "Low Dist":
+                    settings[section][label] = widget.get()
                 else:
                     settings[section][label] = widget.get()
 
             # Special handling for Impedance based on widget type
             imp_widget = self.entries[("Generator Config", "Impedance")]
             if isinstance(imp_widget, ttk.Combobox):
-                # Get code from display value
                 reverse_map = {v: k for k, v in IMPEDANCE_OPTIONS_BAL.items()}
-                display_value = imp_widget.get()
-                code_value = reverse_map.get(display_value, display_value)
+                display_value = imp_widget.get().strip()
+                code_value = reverse_map.get(display_value)
+                if code_value is None:
+                    for v, k in reverse_map.items():
+                        if v.replace(" ", "").lower() == display_value.replace(" ", "").lower():
+                            code_value = k
+                            break
+                if code_value is None:
+                    code_value = "R10"
                 settings["Generator Config"]["Impedance"] = code_value
             else:
-                # Always R5 for Unbal
                 settings["Generator Config"]["Impedance"] = "R5"
 
             with open(SETTINGS_FILE, "w") as f:
@@ -261,7 +527,9 @@ class MainWindow(Frame):
             return
 
         if self.upv:
-            apply_grouped_settings(self.upv)
+            with open(SETTINGS_FILE, "r") as f:
+                updated_settings = json.load(f)
+            apply_grouped_settings(self.upv, data=updated_settings)
             self.status_label.config(text="Settings applied and saved successfully.")
         else:
             messagebox.showwarning("Warning", "Not connected to UPV.")
