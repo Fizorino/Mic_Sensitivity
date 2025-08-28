@@ -8,15 +8,15 @@
     "Bandwidth Generator": "B22",
     "Volt Range (Auto/Fix)": "AUTO",
     "Max Voltage": "10 V",
-    "Ref Voltage": "-91.056839 dBV",
+    "Ref Voltage": "-91.15 dBV",
     "Ref Frequency": "1 kHz"
   },
   "Generator Function": {
     "Function Generator": "SIN",
     "Low Dist": "OFF",
     "Sweep Ctrl": "ASW",
-    "Next Step": "LIST",
-    "X Axis": "VOLT",
+    "Next Step": "ASYNc",
+    "X Axis": "FREQ",
     "Z Axis": "OFF",
     "Spacing": "LOGPoints",
     "Start": "100 Hz",
