@@ -9,7 +9,7 @@
     "Volt Range (Auto/Fix)": "AUTO",
     "Max Voltage": "10 V",
     "Ref Voltage": "-91.15 dBV",
-    "Ref Frequency": "1 kHz"
+    "Ref Frequency": "1000 Hz"
   },
   "Generator Function": {
     "Function Generator": "SIN",
@@ -19,8 +19,8 @@
     "X Axis": "FREQ",
     "Z Axis": "OFF",
     "Spacing": "LOGPoints",
-    "Start": "100 Hz",
-    "Stop": "20 kHz",
+    "Start": "0.1 kHz",
+    "Stop": "20000 Hz",
     "Points": "101",
     "Halt": "MUTE",
     "Voltage": "94 dBr",
