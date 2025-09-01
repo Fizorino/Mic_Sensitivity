@@ -1,10 +1,8 @@
-from cProfile import label
 import pyvisa
 import json
 from tkinter import Tk, Frame, Button, Label, filedialog, messagebox, Canvas, Scrollbar
-from pathlib import Path
-from upv.upv_auto_config import find_upv_ip, apply_grouped_settings, fetch_and_plot_trace, load_config, save_config, command_groups
-from tkinter import ttk, Entry, Label
+from upv.upv_auto_config import find_upv_ip, apply_grouped_settings, fetch_and_plot_trace, load_config, save_config
+from tkinter import ttk, Entry
 from gui.display_map import (
     INSTRUMENT_GENERATOR_OPTIONS,
     CHANNEL_GENERATOR_OPTIONS,
@@ -27,7 +25,6 @@ class MainWindow(Frame):
 
         self.frame = Frame(self.master)
         self.frame.pack(pady=20)
-
         Label(self.frame, text="Mic Sensitivity Control", font=("Helvetica", 16)).pack(pady=10)
         Button(self.frame, text="Connect to UPV", command=self.connect_to_upv).pack(pady=5)
         Button(self.frame, text="Apply Settings", command=self.apply_settings).pack(pady=5)
@@ -43,7 +40,6 @@ class MainWindow(Frame):
         canvas = Canvas(self.center_frame)
         scrollbar = Scrollbar(self.center_frame, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=scrollbar.set)
-
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
@@ -53,24 +49,19 @@ class MainWindow(Frame):
         def center_table(event):
             canvas_width = event.width
             canvas.coords(window_id, canvas_width // 2, 0)
-
         canvas.bind("<Configure>", center_table)
 
-        # Mouse wheel scrolling
         def _on_mousewheel(event):
             canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        canvas.bind("<MouseWheel>", _on_mousewheel)
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
 
         self.settings_frame.bind(
             "<Configure>",
-            lambda e: canvas.configure(
-                scrollregion=canvas.bbox("all")
-            )
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
         )
 
         self.entries = {}
         self.load_settings()
-
         self.upv = None
 
     def load_settings(self):
@@ -613,36 +604,28 @@ class MainWindow(Frame):
             messagebox.showerror("Save Error", f"Could not save settings: {e}")
 
     def connect_to_upv(self):
-        def status_callback(msg):
-            # Show last message in status_label and also append to a log if you want
-            self.status_label.config(text=msg)
-            self.status_label.update_idletasks()
-
         visa_address = load_config()
         rm = pyvisa.ResourceManager()
         self.status_label.config(text="Connecting to UPV...")
         self.status_label.update_idletasks()
         self.upv = None
 
+        def status_callback(msg):
+            self.status_label.config(text=msg)
+            self.status_label.update_idletasks()
+
         if visa_address:
-            for attempt in range(2):
-                try:
-                    status_callback(f"🔌 Trying saved UPV address: {visa_address}")
-                    upv = rm.open_resource(visa_address)
-                    upv.timeout = 5000
-                    idn = upv.query("*IDN?").strip()
-                    status_callback(f"✅ Connected to: {idn}")
-                    self.upv = upv
-                    return
-                except Exception as e:
-                    status_callback(f"⚠️ Attempt {attempt+1} failed: {e}")
-                    if attempt == 0:
-                        status_callback("🔁 Retrying in 1.5 seconds...")
-                        self.status_label.update_idletasks()
-                        self.after(1500)
-                    else:
-                        status_callback("❌ Saved address failed. Searching for a new UPV (LAN/USB)...")
-                        visa_address = None
+            try:
+                status_callback(f"🔌 Trying saved UPV address: {visa_address}")
+                upv = rm.open_resource(visa_address)
+                upv.timeout = 5000
+                idn = upv.query("*IDN?").strip()
+                status_callback(f"✅ Connected to: {idn}")
+                self.upv = upv
+                return
+            except Exception as e:
+                status_callback(f"❌ Saved address failed: {e}\nSearching for a new UPV (LAN/USB)...")
+                visa_address = None
 
         if not visa_address:
             visa_address = find_upv_ip(status_callback)
@@ -840,5 +823,5 @@ class MainWindow(Frame):
         def stop_scroll(event):
             return "break"
         combo.bind("<MouseWheel>", stop_scroll)
-        combo.bind("<Button-4>", stop_scroll)  # For Linux
-        combo.bind("<Button-5>", stop_scroll)  # For Linux
+        combo.bind("<Button-4>", stop_scroll)
+        combo.bind("<Button-5>", stop_scroll)
