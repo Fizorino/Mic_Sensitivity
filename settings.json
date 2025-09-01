@@ -7,7 +7,7 @@
     "Common (Float/Ground)": "GRO",
     "Bandwidth Generator": "B80",
     "Volt Range (Auto/Fix)": "AUTO",
-    "Max Voltage": "10 V",
+    "Max Voltage": "10000 mV",
     "Ref Voltage": "-91.15 dBV",
     "Ref Frequency": "1000 Hz"
   },
@@ -17,9 +17,15 @@
     "Sweep Ctrl": "ALIS",
     "Next Step": "ASYNc",
     "X Axis": "FREQ",
+<<<<<<< HEAD
     "Z Axis": "VOLT",
     "Spacing": "LOGSteps",
     "Start": "0.1 kHz",
+=======
+    "Z Axis": "OFF",
+    "Spacing": "LOGPoints",
+    "Start": "100 Hz",
+>>>>>>> d839bdc02a70a6364f65c84e082b44959ae6d842
     "Stop": "20000 Hz",
     "Points": "101",
     "Halt": "MUTE",
