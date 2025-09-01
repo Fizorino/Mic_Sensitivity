@@ -1,3 +1,4 @@
+from cProfile import label
 import pyvisa
 import json
 from tkinter import Tk, Frame, Button, Label, filedialog, messagebox, Canvas, Scrollbar
@@ -58,7 +59,7 @@ class MainWindow(Frame):
         # Mouse wheel scrolling
         def _on_mousewheel(event):
             canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        canvas.bind("<MouseWheel>", _on_mousewheel)
 
         self.settings_frame.bind(
             "<Configure>",
@@ -189,6 +190,7 @@ class MainWindow(Frame):
                             combo = ttk.Combobox(hv_frame, values=unit_options, width=6, state="readonly")
                             combo.set(unit_part)
                             combo.pack(side="left")
+                            self.prevent_combobox_scroll(combo)
                             import math
                             def convert_voltage_unit(event=None, entry=entry, combo=combo):
                                 try:
@@ -254,6 +256,7 @@ class MainWindow(Frame):
                             combo = ttk.Combobox(hv_frame, values=unit_options, width=6, state="readonly")
                             combo.set(unit_part)
                             combo.pack(side="left")
+                            self.prevent_combobox_scroll(combo)
                             import math
                             def convert_voltage_unit(event=None, entry=entry, combo=combo):
                                 try:
@@ -317,6 +320,7 @@ class MainWindow(Frame):
                             combo = ttk.Combobox(hv_frame, values=unit_options, width=6, state="readonly")
                             combo.set(unit_part)
                             combo.pack(side="left")
+                            self.prevent_combobox_scroll(combo)
                             def convert_freq_unit(event=None, entry=entry, combo=combo):
                                 try:
                                     val = float(entry.get())
@@ -418,6 +422,7 @@ class MainWindow(Frame):
                             combo = ttk.Combobox(hv_frame, values=unit_options, width=6, state="readonly")
                             combo.set(unit_part)
                             combo.pack(side="left")
+                            self.prevent_combobox_scroll(combo)
                             def convert_freq_unit(event=None, entry=entry, combo=combo):
                                 try:
                                     val = float(entry.get())
@@ -435,6 +440,122 @@ class MainWindow(Frame):
                             combo._last_unit = unit_part
                             combo.bind('<<ComboboxSelected>>', convert_freq_unit)
                             self.entries[(section, label)] = (entry, combo)
+                        elif section == "Generator Function" and label == "Voltage":
+                            # Same as Max Voltage: value + unit
+                            import re
+                            unit_options = ["V", "mV", "μV", "dBV", "dBu", "dBm", "dBr"]
+                            val_str = str(value)
+                            match = re.match(r"^([\-\d\.]+)\s*([a-zA-Zμ]+)?$", val_str)
+                            if match:
+                                val_part = match.group(1)
+                                unit_part = match.group(2) if match.group(2) in unit_options else unit_options[0]
+                            else:
+                                val_part = val_str
+                                unit_part = unit_options[0]
+                            hv_frame = Frame(frame)
+                            hv_frame.grid(row=i, column=1, sticky="w", pady=2)
+                            entry = Entry(hv_frame, width=22)
+                            entry.insert(0, val_part)
+                            entry.pack(side="left", padx=(0, 8))
+                            combo = ttk.Combobox(hv_frame, values=unit_options, width=6, state="readonly")
+                            combo.set(unit_part)
+                            combo.pack(side="left")
+                            self.prevent_combobox_scroll(combo)
+                            import math
+
+                            def get_ref_voltage_volts():
+                                # Fetch the Ref Voltage entry and combo from self.entries
+                                ref_entry, ref_combo = self.entries.get(("Generator Config", "Ref Voltage"), (None, None))
+                                if ref_entry is None or ref_combo is None:
+                                    return 1.0  # fallback
+                                try:
+                                    val = float(ref_entry.get())
+                                except Exception:
+                                    return 1.0
+                                unit = ref_combo.get()
+                                scale = {"V": 1, "mV": 1e-3, "μV": 1e-6}
+                                if unit in scale:
+                                    return val * scale[unit]
+                                elif unit == "dBV":
+                                    return 10 ** (val / 20)
+                                elif unit == "dBu":
+                                    return 0.775 * (10 ** (val / 20))
+                                elif unit == "dBm":
+                                    Z = 600
+                                    p = 10 ** (val / 10) / 1000
+                                    return (p * Z) ** 0.5
+                                else:
+                                    return val
+
+                            def convert_voltage_unit(event=None, entry=entry, combo=combo):
+                                try:
+                                    val = float(entry.get())
+                                except Exception:
+                                    return
+                                old_unit = getattr(combo, '_last_unit', unit_part)
+                                new_unit = combo.get()
+                                scale = {"V": 1, "mV": 1e-3, "μV": 1e-6}
+                                Z = 600  # Ohms, for dBm conversion
+
+                                VREF_DBR = get_ref_voltage_volts()
+
+                                def to_volts(val, unit):
+                                    if unit in scale:
+                                        return val * scale[unit]
+                                    elif unit == "dBV":
+                                        return 10 ** (val / 20)
+                                    elif unit == "dBu":
+                                        return 0.775 * (10 ** (val / 20))
+                                    elif unit == "dBm":
+                                        p = 10 ** (val / 10) / 1000
+                                        return (p * Z) ** 0.5
+                                    elif unit == "dBr":
+                                        # dBr: V = Vref * 10^(dBr/20)
+                                        return VREF_DBR * (10 ** (val / 20))
+                                    else:
+                                        return val
+
+                                def from_volts(v, unit):
+                                    if unit in scale:
+                                        new_val = v / scale[unit]
+                                        return int(new_val) if new_val.is_integer() else round(new_val, 6)
+                                    elif unit == "dBV":
+                                        return round(20 * math.log10(v / 1.0), 6) if v > 0 else ""
+                                    elif unit == "dBu":
+                                        return round(20 * math.log10(v / 0.775), 6) if v > 0 else ""
+                                    elif unit == "dBm":
+                                        p = (v ** 2) / Z
+                                        return round(10 * math.log10(p * 1000), 6) if v > 0 else ""
+                                    elif unit == "dBr":
+                                        # dBr: dBr = 20 * log10(V / Vref)
+                                        return round(20 * math.log10(v / VREF_DBR), 6) if v > 0 else ""
+                                    else:
+                                        return v
+
+                                v_si = to_volts(val, old_unit)
+                                result = from_volts(v_si, new_unit)
+                                entry.delete(0, 'end')
+                                entry.insert(0, str(result))
+                                combo._last_unit = new_unit
+
+                            combo._last_unit = unit_part
+                            combo.bind('<<ComboboxSelected>>', convert_voltage_unit)
+                            self.entries[(section, label)] = (entry, combo)
+                        elif section == "Generator Function" and label == "Filter":
+                            from gui.display_map import FILTER_OPTIONS
+                            filter_keys = list(FILTER_OPTIONS.keys())
+                            filter_values = [FILTER_OPTIONS[k] for k in filter_keys]
+                            try:
+                                idx = filter_keys.index(value)
+                                display_val = filter_values[idx]
+                            except Exception:
+                                display_val = filter_values[0]
+                            combo = ttk.Combobox(frame, values=filter_values, width=18, state="readonly")
+                            combo.set(display_val)
+                            combo.grid(row=i, column=1, sticky="w", pady=2)
+                            
+                            # Store both the combobox and the key list for saving
+                            self.entries[(section, label)] = (combo, filter_keys, filter_values)
                         else:
                             entry = Entry(frame, width=22)
                             entry.insert(0, str(value))
@@ -638,6 +759,24 @@ class MainWindow(Frame):
                     val = entry.get().strip()
                     unit = combo.get().strip()
                     settings[section][label] = f"{val} {unit}" if val else ""
+                elif section == "Generator Function" and label == "Voltage":
+                    entry, combo = widget
+                    val = entry.get().strip()
+                    unit = combo.get().strip()
+                    if unit == "μV":
+                        unit_ascii = "uV"
+                    else:
+                        unit_ascii = unit
+                    settings[section][label] = f"{val} {unit_ascii}" if val else ""
+                elif section == "Generator Function" and label == "Filter":
+                    combo, filter_keys, filter_values = widget
+                    selected_display = combo.get()
+                    try:
+                        idx = filter_values.index(selected_display)
+                        selected_key = filter_keys[idx]
+                    except Exception:
+                        selected_key = filter_keys[0]
+                    settings[section][label] = selected_key
                 else:
                     settings[section][label] = widget.get()
 
@@ -696,3 +835,10 @@ class MainWindow(Frame):
             self.fetch_data()
         except Exception as e:
             messagebox.showerror("Sweep Error", f"Failed to start sweep: {e}")
+
+    def prevent_combobox_scroll(self, combo):
+        def stop_scroll(event):
+            return "break"
+        combo.bind("<MouseWheel>", stop_scroll)
+        combo.bind("<Button-4>", stop_scroll)  # For Linux
+        combo.bind("<Button-5>", stop_scroll)  # For Linux

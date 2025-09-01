@@ -66,7 +66,43 @@ DISPLAY_MAP = {
     "LINPoints": "Lin Points",
     "LINSteps": "Lin Steps",
     "LOGPoints": "Log Points",
-    "LOGP": "Log Steps"
+    "LOGP": "Log Steps",
+
+    "OFF": "Off",
+    "UFIL1":"Filter 1",
+    "UFIL2":"Filter 2",
+    "UFIL3":"Filter 3",
+    "UFIL4":"Filter 4",
+    "UFIL5":"Filter 5",
+    "UFIL6":"Filter 6",
+    "UFIL7":"Filter 7",
+    "UFIL8":"Filter 8",
+    "UFIL9":"Filter 9",
+    "AWE":"A Weighting",
+    "CARM":"CCIR 2k wtd",
+    "CCIU":"CCIR unwtd",
+    "CCIR":"CCIR 1k wtd",
+    "CCIT": "CCITT",
+    "CMES":"C Message",
+    "DEMP17":"Deemph J.17",
+    "DCN":"DC Noise HP",
+    "DEMP5015":"Deemph 50/15",
+    "DEMP75":"Deemph 75",
+    "IECT":"IEC Tuner",
+    "JITT":"Jitter wtd",
+    "PEMP17":"Preemp J.17",
+    "PEMP50":"Preemp 50",
+    "PEMP5015":"Preemp 50/15",
+    "PEMP75":"Preemp 75",
+    "HP22":"High-pass 22 Hz",
+    "HP400":"High-pass 400 Hz",
+    "LP22":"Low-pass 22 kHz",
+    "LP30":"Low-pass 30 kHz",
+    "LP80":"Low-pass 80 kHz",
+    "AES17":"AES 17",
+    "CWE":"C Weighting",
+    "URUM":"Rumble unwtd",
+    "WRUM":"Rumble wtd",
 }
 
 
@@ -150,9 +186,9 @@ SWEEP_CTRL_OPTIONS = {
 }
 
 NEXT_STEP_OPTIONS = {
-    "DWELl": "Dwell Value",
     "ASYNc": "Anlr Sync",
-    "LIST": "Dwell File"
+    "LIST": "Dwell File",
+    "DWELl": "Dwell Value",    
 }
 
 X_AXIS_OPTIONS = {
@@ -173,3 +209,40 @@ SPACING_OPTIONS = {
     "LOGSteps": "Log Steps"
 }
 
+FILTER_OPTIONS = {
+    "OFF": "Off",
+    "UFIL1":"Filter 1",
+    "UFIL2":"Filter 2",
+    "UFIL3":"Filter 3",
+    "UFIL4":"Filter 4",
+    "UFIL5":"Filter 5",
+    "UFIL6":"Filter 6",
+    "UFIL7":"Filter 7",
+    "UFIL8":"Filter 8",
+    "UFIL9":"Filter 9",
+    "AWE":"A Weighting",
+    "CARM":"CCIR 2k wtd",
+    "CCIU":"CCIR unwtd",
+    "CCIR":"CCIR 1k wtd",
+    "CCIT": "CCITT",
+    "CMES":"C Message",
+    "DEMP17":"Deemph J.17",
+    "DCN":"DC Noise HP",
+    "DEMP5015":"Deemph 50/15",
+    "DEMP75":"Deemph 75",
+    "IECT":"IEC Tuner",
+    "JITT":"Jitter wtd",
+    "PEMP17":"Preemp J.17",
+    "PEMP50":"Preemp 50",
+    "PEMP5015":"Preemp 50/15",
+    "PEMP75":"Preemp 75",
+    "HP22":"High-pass 22 Hz",
+    "HP400":"High-pass 400 Hz",
+    "LP22":"Low-pass 22 kHz",
+    "LP30":"Low-pass 30 kHz",
+    "LP80":"Low-pass 80 kHz",
+    "AES17":"AES 17",
+    "CWE":"C Weighting",
+    "URUM":"Rumble unwtd",
+    "WRUM":"Rumble wtd",
+}
