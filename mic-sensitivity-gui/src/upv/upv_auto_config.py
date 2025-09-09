@@ -5,7 +5,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 import datetime
 
 CONFIG_FILE = "config.json"
@@ -59,14 +59,14 @@ command_groups = {
         "MAX FFT Size"              : "SENS1:MAX:FFT:SIZE",
     },
     "Analyzer Function": {
-        "Function Analyzer"         : "SENS:FUNC",
+        "Function Analyzer"         : "SENS1:FUNC",
         "S/N Sequence"              : "SENS1:FUNC:SNS",
         "Meas Time"                 : "SENS1:FUNC:APER:MODE",
         "Notch(Gain)"               : "SENS1:NOTCh",
         "Filter1"                   : "SENS1:FILT1",
         "Filter2"                   : "SENS1:FILT2",
         "Filter3"                   : "SENS1:FILT3",
-        "Fnct Setting"              : "SENS1:FUNC:SETT:MODE",
+        "Fnct Settling"             : "SENS1:FUNC:SETT:MODE",
         "Samples"                   : "SENS1:FUNC:SETT:COUN",
         "Tolerance"                 : "SENS1:FUNC:SETT:TOL",
         "Resolution"                : "SENS1:FUNC:SETT:RES",
@@ -74,7 +74,7 @@ command_groups = {
         "Bargraph"                  : "SENS1:FUNC:BARG",
         "POST FFT"                  : "SENS1:FUNC:FFT:STAT",
         "Level Monitor"             : "SENSE6:FUNC",
-        "2nd Monitor"               : "SENSE2:FUNC:SNDM",
+        "Second Monitor"            : "SENSE2:FUNC:SNDM",
         "Input Monitor"             : "SENSE2:FUNCtion",
         "Freq/Phase"                : "SENSE3:FUNCtion",
         "Waveform"                  : "SENSE7:FUNCtion",
@@ -137,31 +137,36 @@ def get_save_path_from_dialog():
     )
     return file_path
 
-def apply_grouped_settings(upv, data=None, config_file=SETTINGS_FILE):
+def apply_grouped_settings(upv, data=None, config_file=SETTINGS_FILE, status_callback=None):
     """Apply grouped settings from JSON to the UPV instrument."""
+    def log(msg):
+        if status_callback:
+            status_callback(msg)
+        else:
+            print(msg)
     if data is None:
         if not Path(config_file).exists():
-            print(f"⚠️ Settings file '{config_file}' not found.")
+            log(f"⚠️ Settings file '{config_file}' not found.")
             return
         with open(config_file, "r") as f:
             data = json.load(f)
 
     for section, settings_map in command_groups.items():
         if section in data:
-            print(f"\n➡️ Applying {section}")
+            log(f"\n➡️ Applying {section}")
             settings = data[section]
             for label, value in settings.items():
                 scpi = settings_map.get(label)
                 if scpi:
                     try:
                         upv.write(f"{scpi} {value}")
-                        print(f"   ✓ {label}: {value}")
+                        log(f"   ✓ {label}: {value}")
                     except Exception as e:
-                        print(f"   ❌ Failed to apply {label}: {e}")
+                        log(f"   ❌ Failed to apply {label}: {e}")
                 else:
-                    print(f"   ⚠️ Unknown setting label: {label}")
+                    log(f"   ⚠️ Unknown setting label: {label}")
         else:
-            print(f"⚠️ Section '{section}' not found in settings.")
+            log(f"⚠️ Section '{section}' not found in settings.")
 
 def fetch_and_plot_trace(upv, export_path="sweep_trace.hxml"):
     """Fetch sweep trace data from UPV, save as .hxml, and plot."""

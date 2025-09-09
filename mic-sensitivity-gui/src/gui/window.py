@@ -1,5 +1,7 @@
+from cProfile import label
 import pyvisa
 import json
+import math
 from tkinter import Tk, Frame, Button, Label, filedialog, messagebox, Canvas, Scrollbar
 from upv.upv_auto_config import find_upv_ip, apply_grouped_settings, fetch_and_plot_trace, load_config, save_config
 from tkinter import ttk, Entry
@@ -23,13 +25,42 @@ class MainWindow(Frame):
         self.master.title("Mic Sensitivity GUI")
         self.master.geometry("1200x700")  # Wider window for all sections
 
-        self.frame = Frame(self.master)
-        self.frame.pack(pady=20)
-        Label(self.frame, text="Mic Sensitivity Control", font=("Helvetica", 16)).pack(pady=10)
-        Button(self.frame, text="Connect to UPV", command=self.connect_to_upv).pack(pady=5)
-        Button(self.frame, text="Apply Settings", command=self.apply_settings).pack(pady=5)
-        Button(self.frame, text="Start Sweep", command=self.start_sweep).pack(pady=5)
-        self.status_label = Label(self.frame, text="", fg="green")
+        self.top_frame = Frame(self.master)
+        self.top_frame.pack(pady=20, fill="x")
+
+        # Left spacer
+        self.left_spacer = Frame(self.top_frame)
+        self.left_spacer.pack(side="left", expand=True)
+
+        # Left column for main controls
+        self.left_frame = Frame(self.top_frame)
+        self.left_frame.pack(side="left", padx=(0, 20), anchor="n")
+
+        Label(self.left_frame, text="Mic Sensitivity Control", font=("Helvetica", 16)).pack(pady=10)
+
+        # Row for Connect to UPV and Save Preset
+        button_row1 = Frame(self.left_frame)
+        button_row1.pack(pady=5, fill="x")
+
+        btn_width = 18  # Adjust as needed for your font/UI
+
+        Button(button_row1, text="Connect to UPV", command=self.connect_to_upv, width=btn_width).pack(side="left", fill="x", expand=True)
+        Button(button_row1, text="Save Preset", command=self.save_preset, width=btn_width).pack(side="left", padx=(10, 0), fill="x", expand=True)
+
+        # Row for Apply Settings and Load Preset
+        button_row2 = Frame(self.left_frame)
+        button_row2.pack(pady=5, fill="x")
+
+        Button(button_row2, text="Apply Settings", command=self.apply_settings, width=btn_width).pack(side="left", fill="x", expand=True)
+        Button(button_row2, text="Load Preset", command=self.load_preset, width=btn_width).pack(side="left", padx=(10, 0), fill="x", expand=True)
+
+        Button(self.left_frame, text="Start Sweep", command=self.start_sweep).pack(pady=5, fill="x")
+
+        # Right spacer
+        self.right_spacer = Frame(self.top_frame)
+        self.right_spacer.pack(side="left", expand=True)
+
+        self.status_label = Label(self.left_frame, text="", fg="green")
         self.status_label.pack(pady=10)
 
         # Centered container for settings tables
@@ -42,6 +73,13 @@ class MainWindow(Frame):
         canvas.configure(yscrollcommand=scrollbar.set)
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
+
+        self.canvas = canvas  # Save reference for later use
+
+        # --- Debugging: Log widget creation ---
+        self.log_text = None
+        self.log_file = None
+        self.enable_logging = False
 
         self.settings_frame = Frame(canvas)
         window_id = canvas.create_window((0, 0), window=self.settings_frame, anchor="n")
@@ -109,22 +147,28 @@ class MainWindow(Frame):
                             combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
                             combo.set(current_display)
                             combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[("Generator Config", label)] = combo
+                            self.bind_combobox_mousewheel(combo, self.canvas)
                         elif section == "Generator Config" and label == "Channel Generator":
                             display_values = list(CHANNEL_GENERATOR_OPTIONS.values())
                             current_display = CHANNEL_GENERATOR_OPTIONS.get(value, value)
                             combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
                             combo.set(current_display)
                             combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[("Generator Config", label)] = combo
+                            self.bind_combobox_mousewheel(combo, self.canvas)
                         elif section == "Generator Config" and label == "Output Type (Unbal/Bal)":
                             display_values = list(OUTPUT_TYPE_OPTIONS.values())
                             current_display = OUTPUT_TYPE_OPTIONS.get(value, value)
                             self.output_type_combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
                             self.output_type_combo.set(current_display)
                             self.output_type_combo.grid(row=i, column=1, sticky="w", pady=2)
+                            self.output_type_combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[("Generator Config", label)] = self.output_type_combo
                             output_type_row = i
+                            self.bind_combobox_mousewheel(self.output_type_combo, self.canvas)
                         elif section == "Generator Config" and label == "Common (Float/Ground)":
                             # Use Radiobuttons for GRO/FLO
                             from gui.display_map import COMMON_OPTIONS
@@ -149,6 +193,7 @@ class MainWindow(Frame):
                             combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
                             combo.set(current_display)
                             combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[("Generator Config", label)] = combo
                         elif section == "Generator Config" and label == "Volt Range (Auto/Fix)":
                             from gui.display_map import VOLT_RANGE_OPTIONS
@@ -181,7 +226,6 @@ class MainWindow(Frame):
                             combo = ttk.Combobox(hv_frame, values=unit_options, width=6, state="readonly")
                             combo.set(unit_part)
                             combo.pack(side="left")
-                            self.prevent_combobox_scroll(combo)
                             import math
                             def convert_voltage_unit(event=None, entry=entry, combo=combo):
                                 try:
@@ -226,6 +270,7 @@ class MainWindow(Frame):
                                 combo._last_unit = new_unit
                             combo._last_unit = unit_part
                             combo.bind('<<ComboboxSelected>>', convert_voltage_unit)
+                            combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = (entry, combo)
                         elif section == "Generator Config" and label == "Ref Voltage":
                             # Same as Max Voltage: value + unit
@@ -247,7 +292,6 @@ class MainWindow(Frame):
                             combo = ttk.Combobox(hv_frame, values=unit_options, width=6, state="readonly")
                             combo.set(unit_part)
                             combo.pack(side="left")
-                            self.prevent_combobox_scroll(combo)
                             import math
                             def convert_voltage_unit(event=None, entry=entry, combo=combo):
                                 try:
@@ -290,6 +334,7 @@ class MainWindow(Frame):
                                 combo._last_unit = new_unit
                             combo._last_unit = unit_part
                             combo.bind('<<ComboboxSelected>>', convert_voltage_unit)
+                            combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = (entry, combo)
                         elif section == "Generator Config" and label == "Ref Frequency":
                             # Value + unit, only Hz and kHz
@@ -311,7 +356,6 @@ class MainWindow(Frame):
                             combo = ttk.Combobox(hv_frame, values=unit_options, width=6, state="readonly")
                             combo.set(unit_part)
                             combo.pack(side="left")
-                            self.prevent_combobox_scroll(combo)
                             def convert_freq_unit(event=None, entry=entry, combo=combo):
                                 try:
                                     val = float(entry.get())
@@ -328,6 +372,7 @@ class MainWindow(Frame):
                                 combo._last_unit = new_unit
                             combo._last_unit = unit_part
                             combo.bind('<<ComboboxSelected>>', convert_freq_unit)
+                            combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = (entry, combo)
                         elif label == "Low Dist":
                             import tkinter as tk
@@ -348,6 +393,7 @@ class MainWindow(Frame):
                             combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
                             combo.set(current_display)
                             combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = combo
                         elif section == "Generator Function" and label == "Sweep Ctrl":
                             from gui.display_map import SWEEP_CTRL_OPTIONS
@@ -357,6 +403,7 @@ class MainWindow(Frame):
                             combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
                             combo.set(current_display)
                             combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = combo
                         elif section == "Generator Function" and label == "Next Step":
                             from gui.display_map import NEXT_STEP_OPTIONS
@@ -366,6 +413,7 @@ class MainWindow(Frame):
                             combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
                             combo.set(current_display)
                             combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = combo
                         elif section == "Generator Function" and label == "X Axis":
                             from gui.display_map import X_AXIS_OPTIONS
@@ -375,6 +423,7 @@ class MainWindow(Frame):
                             combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
                             combo.set(current_display)
                             combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = combo
                         elif section == "Generator Function" and label == "Z Axis":
                             from gui.display_map import Z_AXIS_OPTIONS
@@ -384,6 +433,7 @@ class MainWindow(Frame):
                             combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
                             combo.set(current_display)
                             combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = combo
                         elif section == "Generator Function" and label == "Spacing":
                             from gui.display_map import SPACING_OPTIONS
@@ -393,6 +443,7 @@ class MainWindow(Frame):
                             combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
                             combo.set(current_display)
                             combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = combo
                         elif section == "Generator Function" and label in ("Start", "Stop"):
                             import re
@@ -413,7 +464,6 @@ class MainWindow(Frame):
                             combo = ttk.Combobox(hv_frame, values=unit_options, width=6, state="readonly")
                             combo.set(unit_part)
                             combo.pack(side="left")
-                            self.prevent_combobox_scroll(combo)
                             def convert_freq_unit(event=None, entry=entry, combo=combo):
                                 try:
                                     val = float(entry.get())
@@ -430,6 +480,7 @@ class MainWindow(Frame):
                                 combo._last_unit = new_unit
                             combo._last_unit = unit_part
                             combo.bind('<<ComboboxSelected>>', convert_freq_unit)
+                            combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = (entry, combo)
                         elif section == "Generator Function" and label == "Voltage":
                             # Same as Max Voltage: value + unit
@@ -451,7 +502,6 @@ class MainWindow(Frame):
                             combo = ttk.Combobox(hv_frame, values=unit_options, width=6, state="readonly")
                             combo.set(unit_part)
                             combo.pack(side="left")
-                            self.prevent_combobox_scroll(combo)
                             import math
 
                             def get_ref_voltage_volts():
@@ -531,6 +581,7 @@ class MainWindow(Frame):
 
                             combo._last_unit = unit_part
                             combo.bind('<<ComboboxSelected>>', convert_voltage_unit)
+                            combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = (entry, combo)
                         elif section == "Generator Function" and label == "Filter":
                             from gui.display_map import FILTER_OPTIONS
@@ -541,12 +592,607 @@ class MainWindow(Frame):
                                 display_val = filter_values[idx]
                             except Exception:
                                 display_val = filter_values[0]
-                            combo = ttk.Combobox(frame, values=filter_values, width=18, state="readonly")
+                            combo = ttk.Combobox(frame, values=filter_values, width=20, state="readonly")
                             combo.set(display_val)
                             combo.grid(row=i, column=1, sticky="w", pady=2)
-                            
-                            # Store both the combobox and the key list for saving
+                            combo.bind("<MouseWheel>", lambda e: "break")
+                            self.bind_combobox_mousewheel(combo, self.canvas)
                             self.entries[(section, label)] = (combo, filter_keys, filter_values)
+                        elif section == "Generator Function" and label == "Halt":
+                            from gui.display_map import HALT_OPTIONS
+                            display_values = list(HALT_OPTIONS.values())
+                            reverse_map = {v: k for k, v in HALT_OPTIONS.items()}
+                            current_display = HALT_OPTIONS.get(value, value)
+                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
+                            combo.set(current_display)
+                            combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
+                            self.entries[(section, label)] = combo
+                            self.bind_combobox_mousewheel(combo, self.canvas)
+                        elif section == "Generator Function" and label == "Equalizer":
+                            import tkinter as tk
+                            var = tk.StringVar()
+                            var.set("ON" if str(value).upper() == "ON" else "OFF")
+                            cb = tk.Checkbutton(frame, variable=var, onvalue="ON", offvalue="OFF")
+                            cb.grid(row=i, column=1, sticky="w", pady=2)
+                            if var.get() == "ON":
+                                cb.select()
+                            else:
+                                cb.deselect()
+                            self.entries[(section, label)] = var
+                        elif section == "Generator Function" and label == "DC Offset":
+                            import tkinter as tk
+                            var = tk.StringVar()
+                            var.set("ON" if str(value).upper() == "ON" else "OFF")
+                            cb = tk.Checkbutton(frame, variable=var, onvalue="ON", offvalue="OFF")
+                            cb.grid(row=i, column=1, sticky="w", pady=2)
+                            if var.get() == "ON":
+                                cb.select()
+                            else:
+                                cb.deselect()
+                            self.entries[(section, label)] = var
+                        elif section == "Analyzer Config" and label == "Instrument Analyzer":
+                            from gui.display_map import INSTRUMENT_ANALYZER_OPTIONS
+                            display_values = list(INSTRUMENT_ANALYZER_OPTIONS.values())
+                            reverse_map = {v: k for k, v in INSTRUMENT_ANALYZER_OPTIONS.items()}
+                            current_display = INSTRUMENT_ANALYZER_OPTIONS.get(value, value)
+                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
+                            combo.set(current_display)
+                            combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
+                            self.entries[(section, label)] = combo
+                            self.bind_combobox_mousewheel(combo, self.canvas)
+                        elif section == "Analyzer Config" and label == "Channel Analyzer":
+                            from gui.display_map import CHANNEL_ANALYZER_OPTIONS
+                            display_values = list(CHANNEL_ANALYZER_OPTIONS.values())
+                            reverse_map = {v: k for k, v in CHANNEL_ANALYZER_OPTIONS.items()}
+                            current_display = CHANNEL_ANALYZER_OPTIONS.get(value, value)
+                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
+                            combo.set(current_display)
+                            combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
+                            self.entries[(section, label)] = combo
+                            self.bind_combobox_mousewheel(combo, self.canvas)
+                        elif section == "Analyzer Config" and label == "CH1 Coupling":
+                            from gui.display_map import CH1_COUPLING_OPTIONS
+                            import tkinter as tk
+                            ch1_coupling_var = tk.StringVar()
+                            ch1_coupling_var.set(value if value in CH1_COUPLING_OPTIONS else "AC")
+                            radio_frame = Frame(frame)
+                            radio_frame.grid(row=i, column=1, sticky="w", pady=2)
+                            for code, display in CH1_COUPLING_OPTIONS.items():
+                                rb = ttk.Radiobutton(radio_frame, text=display, variable=ch1_coupling_var, value=code)
+                                rb.pack(side="left", padx=5)
+                            self.entries[(section, label)] = ch1_coupling_var
+                        elif section == "Analyzer Config" and label == "Bandwidth Analyzer":
+                            from gui.display_map import BANDWIDTH_ANALYZER_OPTIONS
+                            display_values = list(BANDWIDTH_ANALYZER_OPTIONS.values())
+                            reverse_map = {v: k for k, v in BANDWIDTH_ANALYZER_OPTIONS.items()}
+                            current_display = BANDWIDTH_ANALYZER_OPTIONS.get(value, value)
+                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
+                            combo.set(current_display)
+                            combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
+                            self.entries[(section, label)] = combo
+                            self.bind_combobox_mousewheel(combo, self.canvas)
+                        elif section == "Analyzer Config" and label == "Pre Filter":
+                            from gui.display_map import PRE_FILTER_OPTIONS
+                            display_values = list(PRE_FILTER_OPTIONS.values())
+                            reverse_map = {v: k for k, v in PRE_FILTER_OPTIONS.items()}
+                            current_display = PRE_FILTER_OPTIONS.get(value, value)
+                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
+                            combo.set(current_display)
+                            combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
+                            self.entries[(section, label)] = combo
+                            self.bind_combobox_mousewheel(combo, self.canvas)
+                        elif section == "Analyzer Config" and label == "CH1 Input":
+                            from gui.display_map import CH1_INPUT_OPTIONS
+                            display_values = list(CH1_INPUT_OPTIONS.values())
+                            reverse_map = {v: k for k, v in CH1_INPUT_OPTIONS.items()}
+                            current_display = CH1_INPUT_OPTIONS.get(value, value)
+                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
+                            combo.set(current_display)
+                            combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
+                            self.entries[(section, label)] = combo
+                            self.bind_combobox_mousewheel(combo, self.canvas)
+                        elif section == "Analyzer Config" and label == "CH1 Impedance":
+                            from gui.display_map import CH1_IMPEDANCE_OPTIONS
+                            display_values = list(CH1_IMPEDANCE_OPTIONS.values())
+                            reverse_map = {v: k for k, v in CH1_IMPEDANCE_OPTIONS.items()}
+                            current_display = CH1_IMPEDANCE_OPTIONS.get(value, value)
+                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
+                            combo.set(current_display)
+                            combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
+                            self.entries[(section, label)] = combo
+                            self.bind_combobox_mousewheel(combo, self.canvas)
+                        elif section == "Analyzer Config" and label == "CH1 Ground/Common":
+                            from gui.display_map import CH1_COMMON_OPTIONS
+                            import tkinter as tk
+                            ch1_common_var = tk.StringVar()
+                            ch1_common_var.set(value if value in CH1_COMMON_OPTIONS else "FLOat")
+                            radio_frame = Frame(frame)
+                            radio_frame.grid(row=i, column=1, sticky="w", pady=2)
+                            for code, display in CH1_COMMON_OPTIONS.items():
+                                rb = ttk.Radiobutton(radio_frame, text=display, variable=ch1_common_var, value=code)
+                                rb.pack(side="left", padx=5)
+                            self.entries[(section, label)] = ch1_common_var
+                        elif section == "Analyzer Config" and label == "CH1 Range":
+                            from gui.display_map import CH1_RANGE_OPTIONS
+                            display_values = list(CH1_RANGE_OPTIONS.values())
+                            reverse_map = {v: k for k, v in CH1_RANGE_OPTIONS.items()}
+                            current_display = CH1_RANGE_OPTIONS.get(value, value)
+                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
+                            combo.set(current_display)
+                            combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
+                            self.entries[(section, label)] = combo
+                            self.bind_combobox_mousewheel(combo, self.canvas)
+                        elif section == "Analyzer Config" and label == "Ref Imped":
+                            import tkinter as tk
+                            import re
+                            hv_frame = Frame(frame)
+                            hv_frame.grid(row=i, column=1, sticky="w", pady=2)
+                            entry = Entry(hv_frame, width=22)
+                            # Parse value and unit (handles "600 Ω", "0.6 kΩ", "600", "0.6kΩ", etc.)
+                            val_str = str(value)
+                            match = re.match(r"^\s*([\d\.\-]+)\s*(k?Ω|k?ohm|k?Ohm)?\s*$", val_str, re.IGNORECASE)
+                            if match:
+                                val_part = match.group(1)
+                                unit_part = match.group(2) or "Ω"
+                                unit_part = unit_part.replace("ohm", "Ω").replace("Ohm", "Ω")
+                                if unit_part.lower().startswith("k"):
+                                    unit_part = "kΩ"
+                                else:
+                                    unit_part = "Ω"
+                            else:
+                                val_part = val_str
+                                unit_part = "Ω"
+                            entry.insert(0, val_part)
+                            entry.pack(side="left", padx=(0, 8))
+                            combo = ttk.Combobox(hv_frame, values=["Ω", "kΩ"], width=6, state="readonly")
+                            combo.set(unit_part)
+                            combo.pack(side="left")
+                            # Conversion logic: when unit changes, convert value
+                            def convert_impedance_unit(event=None, entry=entry, combo=combo):
+                                try:
+                                    val = float(entry.get())
+                                except Exception:
+                                    return
+                                old_unit = getattr(combo, '_last_unit', unit_part)
+                                new_unit = combo.get()
+                                if old_unit == new_unit:
+                                    return
+                                if old_unit == "Ω" and new_unit == "kΩ":
+                                    val = val / 1000
+                                elif old_unit == "kΩ" and new_unit == "Ω":
+                                    val = val * 1000
+                                entry.delete(0, 'end')
+                                entry.insert(0, str(int(val) if val.is_integer() else round(val, 6)))
+                                combo._last_unit = new_unit
+                            combo._last_unit = unit_part
+                            combo.bind('<<ComboboxSelected>>', convert_impedance_unit)
+                            combo.bind("<MouseWheel>", lambda e: "break")
+                            self.entries[(section, label)] = (entry, combo)
+                        elif section == "Analyzer Config" and label == "Start Cond":
+                            from gui.display_map import START_COND_OPTIONS
+                            display_values = list(START_COND_OPTIONS.values())
+                            reverse_map = {v: k for k, v in START_COND_OPTIONS.items()}
+                            current_display = START_COND_OPTIONS.get(value, value)
+                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
+                            combo.set(current_display)
+                            combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
+                            self.entries[(section, label)] = combo
+                            self.bind_combobox_mousewheel(combo, self.canvas)
+                        elif section == "Analyzer Config" and label == "Delay":
+                            import tkinter as tk
+                            import re
+                            delay_frame = Frame(frame)
+                            delay_frame.grid(row=i, column=1, sticky="w", pady=2)
+                            entry = Entry(delay_frame, width=22)
+                            # Parse value and unit (handles "2 s", "2000 ms", "0.5 min", etc.)
+                            val_str = str(value)
+                            match = re.match(r"^\s*([\d\.\-]+)\s*(s|ms|us|min)?\s*$", val_str, re.IGNORECASE)
+                            if match:
+                                val_part = match.group(1)
+                                unit_part = match.group(2) or "s"
+                                unit_part = unit_part.lower()
+                            else:
+                                val_part = val_str
+                                unit_part = "s"
+                            entry.insert(0, val_part)
+                            entry.pack(side="left", padx=(0, 8))
+                            unit_display_map = {"s": "s", "ms": "ms", "us": "μs", "min": "min"}
+                            unit_reverse_map = {v: k for k, v in unit_display_map.items()}
+                            combo = ttk.Combobox(delay_frame, values=list(unit_display_map.values()), width=6, state="readonly")
+                            combo.set(unit_display_map.get(unit_part, unit_part))
+                            combo.pack(side="left")
+                            # Conversion logic: when unit changes, convert value
+                            def convert_delay_unit(event=None, entry=entry, combo=combo):
+                                try:
+                                    val = float(entry.get())
+                                except Exception:
+                                    return
+                                # Use the display-to-code map
+                                old_unit_display = getattr(combo, '_last_unit', unit_part)
+                                new_unit_display = combo.get()
+                                old_unit = unit_reverse_map.get(old_unit_display, old_unit_display)
+                                new_unit = unit_reverse_map.get(new_unit_display, new_unit_display)
+                                if old_unit == new_unit:
+                                    return
+                                # Conversion factors to seconds
+                                to_sec = {"us": 1e-6, "ms": 1e-3, "s": 1, "min": 60}
+                                from_sec = {"us": 1e6, "ms": 1e3, "s": 1, "min": 1/60}
+                                val_in_sec = val * to_sec.get(old_unit, 1)
+                                new_val = val_in_sec * from_sec.get(new_unit, 1)
+                                entry.delete(0, 'end')
+                                entry.insert(0, str(int(new_val) if new_val.is_integer() else round(new_val, 6)))
+                                combo._last_unit = new_unit_display
+                            combo._last_unit = unit_part
+                            combo.bind('<<ComboboxSelected>>', convert_delay_unit)
+                            combo.bind("<MouseWheel>", lambda e: "break")
+                            self.entries[(section, label)] = (entry, combo)
+                        elif section == "Analyzer Config" and label == "MAX FFT Size":
+                            from gui.display_map import MAX_FFT_SIZE_OPTIONS
+                            display_values = list(MAX_FFT_SIZE_OPTIONS.values())
+                            reverse_map = {v: k for k, v in MAX_FFT_SIZE_OPTIONS.items()}
+                            current_display = MAX_FFT_SIZE_OPTIONS.get(value, value)
+                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
+                            combo.set(current_display)
+                            combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
+                            self.entries[(section, label)] = combo
+                            self.bind_combobox_mousewheel(combo, self.canvas)
+                        elif section == "Analyzer Function" and label == "Function Analyzer":
+                            from gui.display_map import FUNCTION_ANALYZER_OPTIONS
+                            display_values = list(FUNCTION_ANALYZER_OPTIONS.values())
+                            reverse_map = {v: k for k, v in FUNCTION_ANALYZER_OPTIONS.items()}
+                            current_display = FUNCTION_ANALYZER_OPTIONS.get(value, value)
+                            combo = ttk.Combobox(frame, values=display_values, width=24, state="readonly")
+                            combo.set(current_display)
+                            combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
+                            self.entries[(section, label)] = combo
+                            self.bind_combobox_mousewheel(combo, self.canvas)
+                        elif section == "Analyzer Function" and label == "S/N Sequence":
+                            import tkinter as tk
+                            var = tk.BooleanVar()
+                            var.set(str(value).upper() == "ON")
+                            chk = tk.Checkbutton(frame, variable=var)
+                            chk.grid(row=i, column=1, sticky="w", pady=2)
+                            self.entries[(section, label)] = var
+                        elif section == "Analyzer Function" and label == "Meas Time":
+                            from gui.display_map import MEAS_TIME_OPTIONS
+                            display_values = list(MEAS_TIME_OPTIONS.values())
+                            reverse_map = {v: k for k, v in MEAS_TIME_OPTIONS.items()}
+                            current_display = MEAS_TIME_OPTIONS.get(value, value)
+                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
+                            combo.set(current_display)
+                            combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
+                            self.entries[(section, label)] = combo
+                            self.bind_combobox_mousewheel(combo, self.canvas)
+                        elif section == "Analyzer Function" and label == "Notch(Gain)":
+                            from gui.display_map import NOTCH_OPTIONS
+                            display_values = list(NOTCH_OPTIONS.values())
+                            reverse_map = {v: k for k, v in NOTCH_OPTIONS.items()}
+                            current_display = NOTCH_OPTIONS.get(value, value)
+                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
+                            combo.set(current_display)
+                            combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
+                            self.entries[(section, label)] = combo
+                            self.bind_combobox_mousewheel(combo, self.canvas)
+                        elif section == "Analyzer Function" and label == "Filter1":
+                            from gui.display_map import FILTER1_OPTIONS
+                            display_values = list(FILTER1_OPTIONS.values())
+                            reverse_map = {v: k for k, v in FILTER1_OPTIONS.items()}
+                            current_display = FILTER1_OPTIONS.get(value, value)
+                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
+                            combo.set(current_display)
+                            combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
+                            self.entries[(section, label)] = combo
+                            self.bind_combobox_mousewheel(combo, self.canvas)
+                        elif section == "Analyzer Function" and label == "Filter2":
+                            from gui.display_map import FILTER2_OPTIONS
+                            display_values = list(FILTER2_OPTIONS.values())
+                            reverse_map = {v: k for k, v in FILTER2_OPTIONS.items()}
+                            current_display = FILTER2_OPTIONS.get(value, value)
+                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
+                            combo.set(current_display)
+                            combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
+                            self.entries[(section, label)] = combo
+                            self.bind_combobox_mousewheel(combo, self.canvas)
+                        elif section == "Analyzer Function" and label == "Filter3":
+                            from gui.display_map import FILTER3_OPTIONS
+                            display_values = list(FILTER3_OPTIONS.values())
+                            reverse_map = {v: k for k, v in FILTER3_OPTIONS.items()}
+                            current_display = FILTER3_OPTIONS.get(value, value)
+                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
+                            combo.set(current_display)
+                            combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
+                            self.entries[(section, label)] = combo
+                            self.bind_combobox_mousewheel(combo, self.canvas)
+                        elif section == "Analyzer Function" and label == "Fnct Settling":
+                            from gui.display_map import FNCT_SETTLING_OPTIONS
+                            display_values = list(FNCT_SETTLING_OPTIONS.values())
+                            reverse_map = {v: k for k, v in FNCT_SETTLING_OPTIONS.items()}
+                            current_display = FNCT_SETTLING_OPTIONS.get(value, value)
+                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
+                            combo.set(current_display)
+                            combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
+                            self.entries[(section, label)] = combo
+                            self.bind_combobox_mousewheel(combo, self.canvas)
+                        elif section == "Analyzer Function" and label == "Tolerance":
+                            import tkinter as tk
+                            import re
+                            tol_frame = Frame(frame)
+                            tol_frame.grid(row=i, column=1, sticky="w", pady=2)
+                            entry = Entry(tol_frame, width=22)
+                            # Parse value and unit (handles "0.1 %", "0.1 dB", "0.1", etc.)
+                            val_str = str(value)
+                            match = re.match(r"^\s*([\d\.\-]+)\s*(%|dB)?\s*$", val_str, re.IGNORECASE)
+                            if match:
+                                val_part = match.group(1)
+                                unit_part = match.group(2) or "%"
+                            else:
+                                val_part = val_str
+                                unit_part = "%"
+                            entry.insert(0, val_part)
+                            entry.pack(side="left", padx=(0, 8))
+                            combo = ttk.Combobox(tol_frame, values=["%", "dB"], width=5, state="readonly")
+                            combo.set(unit_part)
+                            combo.pack(side="left")
+
+                            def convert_tolerance_unit(event=None, entry=entry, combo=combo):
+                                try:
+                                    val = float(entry.get())
+                                except Exception:
+                                    return
+                                old_unit = getattr(combo, '_last_unit', unit_part)
+                                new_unit = combo.get()
+                                if old_unit == new_unit:
+                                    return
+                                if old_unit == "%" and new_unit == "dB":
+                                    # Convert percentage to dB using new formula
+                                    if val <= -100:
+                                        entry.delete(0, 'end')
+                                        entry.insert(0, "")
+                                    else:
+                                        db_val = 20 * math.log10(1 + (val / 100))
+                                        entry.delete(0, 'end')
+                                        entry.insert(0, str(round(db_val, 6)))
+                                elif old_unit == "dB" and new_unit == "%":
+                                    # Convert dB to percentage using new formula
+                                    percent_val = (10 ** (val / 20) - 1) * 100
+                                    entry.delete(0, 'end')
+                                    entry.insert(0, str(round(percent_val, 6)))
+                                combo._last_unit = new_unit
+
+                            combo._last_unit = unit_part
+                            combo.bind('<<ComboboxSelected>>', convert_tolerance_unit)
+                            combo.bind("<MouseWheel>", lambda e: "break")
+                            self.entries[(section, label)] = (entry, combo)
+                        elif section == "Analyzer Function" and label == "Resolution":
+                            import tkinter as tk
+                            import re
+                            import math
+                            res_frame = Frame(frame)
+                            res_frame.grid(row=i, column=1, sticky="w", pady=2)
+                            entry = Entry(res_frame, width=22)
+                            # Parse value and unit (handles "0.1 dBV", "0.1 V", etc.)
+                            val_str = str(value)
+                            match = re.match(r"^\s*([\d\.\-]+)\s*([a-zA-Z]+)?\s*$", val_str)
+                            if match:
+                                val_part = match.group(1)
+                                unit_part = match.group(2) or "V"
+                            else:
+                                val_part = val_str
+                                unit_part = "V"
+                            entry.insert(0, val_part)
+                            entry.pack(side="left", padx=(0, 8))
+                            units = ["V", "mV", "uV", "dBV", "dBu", "W", "mW", "uW", "dBm"]
+                            combo = ttk.Combobox(res_frame, values=units, width=6, state="readonly")
+                            combo.set(unit_part)
+                            combo.pack(side="left")
+
+                            def convert_resolution_unit(event=None, entry=entry, combo=combo):
+                                try:
+                                    val = float(entry.get())
+                                except Exception:
+                                    return
+                                old_unit = getattr(combo, '_last_unit', unit_part)
+                                new_unit = combo.get()
+                                if old_unit == new_unit:
+                                    return
+
+                                # Conversion logic
+                                # All conversions go through volts (V) for voltage units and watts (W) for power units
+                                # Reference: 0 dBV = 1 V, 0 dBu = 0.775 V, 0 dBm = 1 mW (in 600 ohm, but usually 1 mW in 1 kohm or 50 ohm for audio/RF)
+                                # We'll use 600 ohm for dBm unless you specify otherwise
+
+                                # Helper functions
+                                def to_volts(val, unit):
+                                    if unit == "V":
+                                        return val
+                                    elif unit == "mV":
+                                        return val / 1e3
+                                    elif unit == "uV":
+                                        return val / 1e6
+                                    elif unit == "dBV":
+                                        return 10 ** (val / 20)
+                                    elif unit == "dBu":
+                                        return 0.775 * (10 ** (val / 20))
+                                    elif unit == "W":
+                                        return math.sqrt(val * 600)
+                                    elif unit == "mW":
+                                        return math.sqrt((val / 1e3) * 600)
+                                    elif unit == "uW":
+                                        return math.sqrt((val / 1e6) * 600)
+                                    elif unit == "dBm":
+                                        # dBm to W: P = 10^(dBm/10) * 1mW, then V = sqrt(P*R)
+                                        p_watt = 10 ** (val / 10) * 1e-3
+                                        return math.sqrt(p_watt * 600)
+                                    else:
+                                        return val
+
+                                def from_volts(v, unit):
+                                    if unit == "V":
+                                        return v
+                                    elif unit == "mV":
+                                        return v * 1e3
+                                    elif unit == "uV":
+                                        return v * 1e6
+                                    elif unit == "dBV":
+                                        return 20 * math.log10(v) if v > 0 else ""
+                                    elif unit == "dBu":
+                                        return 20 * math.log10(v / 0.775) if v > 0 else ""
+                                    elif unit == "W":
+                                        return (v ** 2) / 600
+                                    elif unit == "mW":
+                                        return ((v ** 2) / 600) * 1e3
+                                    elif unit == "uW":
+                                        return ((v ** 2) / 600) * 1e6
+                                    elif unit == "dBm":
+                                        p_watt = (v ** 2) / 600
+                                        return 10 * math.log10(p_watt / 1e-3) if p_watt > 0 else ""
+                                    else:
+                                        return v
+
+                                # Convert old value to volts or watts
+                                v = to_volts(val, old_unit)
+                                # Convert volts to new unit
+                                new_val = from_volts(v, new_unit)
+                                if new_val == "":
+                                    entry.delete(0, 'end')
+                                else:
+                                    entry.delete(0, 'end')
+                                    entry.insert(0, str(round(new_val, 6)))
+                                combo._last_unit = new_unit
+
+                            combo._last_unit = unit_part
+                            combo.bind('<<ComboboxSelected>>', convert_resolution_unit)
+                            combo.bind("<MouseWheel>", lambda e: "break")
+                            self.entries[(section, label)] = (entry, combo)
+                        elif section == "Analyzer Function" and label == "Timeout":
+                            import tkinter as tk
+                            import re
+                            timeout_frame = Frame(frame)
+                            timeout_frame.grid(row=i, column=1, sticky="w", pady=2)
+                            entry = Entry(timeout_frame, width=22)
+                            # Parse value and unit (handles "10 s", "10000 ms", etc.)
+                            val_str = str(value)
+                            match = re.match(r"^\s*([\d\.\-]+)\s*(s|ms|us|min)?\s*$", val_str, re.IGNORECASE)
+                            if match:
+                                val_part = match.group(1)
+                                unit_part = match.group(2) or "s"
+                                unit_part = unit_part.lower()
+                            else:
+                                val_part = val_str
+                                unit_part = "s"
+                            entry.insert(0, val_part)
+                            entry.pack(side="left", padx=(0, 8))
+                            unit_display_map = {"s": "s", "ms": "ms", "us": "μs", "min": "min"}
+                            unit_reverse_map = {v: k for k, v in unit_display_map.items()}
+                            combo = ttk.Combobox(timeout_frame, values=list(unit_display_map.values()), width=6, state="readonly")
+                            combo.set(unit_display_map.get(unit_part, unit_part))
+                            combo.pack(side="left")
+                            # Conversion logic: when unit changes, convert value
+                            def convert_timeout_unit(event=None, entry=entry, combo=combo):
+                                try:
+                                    val = float(entry.get())
+                                except Exception:
+                                    return
+                                old_unit_display = getattr(combo, '_last_unit', unit_part)
+                                new_unit_display = combo.get()
+                                old_unit = unit_reverse_map.get(old_unit_display, old_unit_display)
+                                new_unit = unit_reverse_map.get(new_unit_display, new_unit_display)
+                                if old_unit == new_unit:
+                                    return
+                                # Conversion factors to seconds
+                                to_sec = {"us": 1e-6, "ms": 1e-3, "s": 1, "min": 60}
+                                from_sec = {"us": 1e6, "ms": 1e3, "s": 1, "min": 1/60}
+                                val_in_sec = val * to_sec.get(old_unit, 1)
+                                new_val = val_in_sec * from_sec.get(new_unit, 1)
+                                entry.delete(0, 'end')
+                                entry.insert(0, str(int(new_val) if new_val.is_integer() else round(new_val, 6)))
+                                combo._last_unit = new_unit_display
+                            combo._last_unit = unit_part
+                            combo.bind('<<ComboboxSelected>>', convert_timeout_unit)
+                            combo.bind("<MouseWheel>", lambda e: "break")
+                            self.entries[(section, label)] = (entry, combo)
+                        elif section == "Analyzer Function" and label == "Bargraph":
+                            import tkinter as tk
+                            var = tk.BooleanVar()
+                            var.set(str(value).upper() == "ON")
+                            chk = tk.Checkbutton(frame, variable=var)
+                            chk.grid(row=i, column=1, sticky="w", pady=2)
+                            self.entries[(section, label)] = var
+                        elif section == "Analyzer Function" and label == "POST FFT":
+                            import tkinter as tk
+                            var = tk.BooleanVar()
+                            var.set(str(value).upper() == "ON")
+                            chk = tk.Checkbutton(frame, variable=var)
+                            chk.grid(row=i, column=1, sticky="w", pady=2)
+                            self.entries[(section, label)] = var
+                        elif section == "Analyzer Function" and label == "Level Monitor":
+                            from gui.display_map import LEVEL_MONITOR_OPTIONS
+                            display_values = list(LEVEL_MONITOR_OPTIONS.values())
+                            reverse_map = {v: k for k, v in LEVEL_MONITOR_OPTIONS.items()}
+                            current_display = LEVEL_MONITOR_OPTIONS.get(value, value)
+                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
+                            combo.set(current_display)
+                            combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
+                            self.entries[(section, label)] = combo
+                            self.bind_combobox_mousewheel(combo, self.canvas)
+                        elif section == "Analyzer Function" and label == "Second Monitor":
+                            from gui.display_map import SECOND_MONITOR_OPTIONS
+                            display_values = list(SECOND_MONITOR_OPTIONS.values())
+                            reverse_map = {v: k for k, v in SECOND_MONITOR_OPTIONS.items()}
+                            current_display = SECOND_MONITOR_OPTIONS.get(value, value)
+                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
+                            combo.set(current_display)
+                            combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
+                            self.entries[(section, label)] = combo
+                            self.bind_combobox_mousewheel(combo, self.canvas)
+                        elif section == "Analyzer Function" and label == "Input Monitor":
+                            from gui.display_map import INPUT_MONITOR_OPTIONS
+                            display_values = list(INPUT_MONITOR_OPTIONS.values())
+                            reverse_map = {v: k for k, v in INPUT_MONITOR_OPTIONS.items()}
+                            current_display = INPUT_MONITOR_OPTIONS.get(value, value)
+                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
+                            combo.set(current_display)
+                            combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
+                            self.entries[(section, label)] = combo
+                            self.bind_combobox_mousewheel(combo, self.canvas)
+                        elif section == "Analyzer Function" and label == "Freq/Phase":
+                            from gui.display_map import FREQ_OPTIONS
+                            display_values = list(FREQ_OPTIONS.values())
+                            reverse_map = {v: k for k, v in FREQ_OPTIONS.items()}
+                            current_display = FREQ_OPTIONS.get(value, value)
+                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
+                            combo.set(current_display)
+                            combo.grid(row=i, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
+                            self.entries[(section, label)] = combo
+                            self.bind_combobox_mousewheel(combo, self.canvas)
+                        elif section == "Analyzer Function" and label == "Waveform":
+                            import tkinter as tk
+                            var = tk.BooleanVar()
+                            var.set(str(value).upper() == "ON")
+                            chk = tk.Checkbutton(frame, variable=var)
+                            chk.grid(row=i, column=1, sticky="w", pady=2)
+                            self.entries[(section, label)] = var
                         else:
                             entry = Entry(frame, width=22)
                             entry.insert(0, str(value))
@@ -574,6 +1220,7 @@ class MainWindow(Frame):
                             combo = ttk.Combobox(self.impedance_frame, values=display_values, width=20, state="readonly")
                             combo.set(current_display)
                             combo.grid(row=self.impedance_row, column=1, sticky="w", pady=2)
+                            combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[("Generator Config", "Impedance")] = combo
 
                     # Initial setup for Impedance widget
@@ -597,8 +1244,8 @@ class MainWindow(Frame):
             for (section, label), entry in self.entries.items():
                 if section in settings and label in settings[section]:
                     settings[section][label] = entry.get()
-            with open(SETTINGS_FILE, "w") as f:
-                json.dump(settings, f, indent=2)
+            with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+                json.dump(settings, f, indent=2, ensure_ascii=False)
             self.status_label.config(text="Settings saved successfully.", fg="green")
         except Exception as e:
             messagebox.showerror("Save Error", f"Could not save settings: {e}")
@@ -651,6 +1298,9 @@ class MainWindow(Frame):
 
             reverse_instrument_map = {v: k for k, v in INSTRUMENT_GENERATOR_OPTIONS.items()}
             reverse_channel_map = {v: k for k, v in CHANNEL_GENERATOR_OPTIONS.items()}
+
+            unit_display_map = {"s": "s", "ms": "ms", "us": "μs", "min": "min"}
+            unit_reverse_map = {v: k for k, v in unit_display_map.items()}
 
             for (section, label), widget in self.entries.items():
                 if section == "Generator Config" and label == "Instrument Generator":
@@ -760,6 +1410,193 @@ class MainWindow(Frame):
                     except Exception:
                         selected_key = filter_keys[0]
                     settings[section][label] = selected_key
+                elif section == "Generator Function" and label == "Halt":
+                    from gui.display_map import HALT_OPTIONS
+                    reverse_map = {v: k for k, v in HALT_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_map.get(display_value, display_value)
+                    settings[section][label] = code_value
+                elif section == "Generator Function" and label == "Equalizer":
+                    settings[section][label] = widget.get()
+                elif section == "Generator Function" and label == "DC Offset":
+                    settings[section][label] = widget.get()
+                elif section == "Analyzer Config" and label == "Instrument Analyzer":
+                    from gui.display_map import INSTRUMENT_ANALYZER_OPTIONS
+                    reverse_map = {v: k for k, v in INSTRUMENT_ANALYZER_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_map.get(display_value, display_value)
+                    settings[section][label] = code_value
+                elif section == "Analyzer Config" and label == "Channel Analyzer":
+                    from gui.display_map import CHANNEL_ANALYZER_OPTIONS
+                    reverse_map = {v: k for k, v in CHANNEL_ANALYZER_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_map.get(display_value, display_value)
+                    settings[section][label] = code_value
+                elif section == "Analyzer Config" and label == "CH1 Coupling":
+                    settings[section][label] = widget.get()
+                elif section == "Analyzer Config" and label == "Bandwidth Analyzer":
+                    from gui.display_map import BANDWIDTH_ANALYZER_OPTIONS
+                    reverse_map = {v: k for k, v in BANDWIDTH_ANALYZER_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_map.get(display_value, display_value)
+                    settings[section][label] = code_value
+                elif section == "Analyzer Config" and label == "Pre Filter":
+                    from gui.display_map import PRE_FILTER_OPTIONS
+                    reverse_map = {v: k for k, v in PRE_FILTER_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_map.get(display_value, display_value)
+                    settings[section][label] = code_value
+                elif section == "Analyzer Config" and label == "CH1 Input":
+                    from gui.display_map import CH1_INPUT_OPTIONS
+                    reverse_map = {v: k for k, v in CH1_INPUT_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_map.get(display_value, display_value)
+                    settings[section][label] = code_value
+                elif section == "Analyzer Config" and label == "CH1 Impedance":
+                    from gui.display_map import CH1_IMPEDANCE_OPTIONS
+                    reverse_map = {v: k for k, v in CH1_IMPEDANCE_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_map.get(display_value, display_value)
+                    settings[section][label] = code_value
+                elif section == "Analyzer Config" and label == "CH1 Ground/Common":
+                    settings[section][label] = widget.get()
+                elif section == "Analyzer Config" and label == "CH1 Range":
+                    from gui.display_map import CH1_RANGE_OPTIONS
+                    reverse_map = {v: k for k, v in CH1_RANGE_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_map.get(display_value, display_value)
+                    settings[section][label] = code_value
+                elif section == "Analyzer Config" and label == "Ref Imped":
+                    entry, combo = widget
+                    val = entry.get().strip()
+                    unit = combo.get().strip()
+                    # Convert symbol to word
+                    if unit == "Ω":
+                        unit_word = "ohm"
+                    elif unit == "kΩ":
+                        unit_word = "kohm"
+                    else:
+                        unit_word = unit
+                    settings[section][label] = f"{val} {unit_word}" if val else ""
+                elif section == "Analyzer Config" and label == "Start Cond":
+                    from gui.display_map import START_COND_OPTIONS
+                    reverse_map = {v: k for k, v in START_COND_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_map.get(display_value, display_value)
+                elif section == "Analyzer Config" and label == "Delay":
+                    entry, combo = widget
+                    val = entry.get().strip()
+                    unit_display = combo.get().strip()
+                    unit = unit_reverse_map.get(unit_display, unit_display)
+                    settings[section][label] = f"{val} {unit}" if val else ""
+                elif section == "Analyzer Config" and label == "MAX FFT Size":
+                    from gui.display_map import MAX_FFT_SIZE_OPTIONS
+                    reverse_map = {v: k for k, v in MAX_FFT_SIZE_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_map.get(display_value, display_value)
+                    settings[section][label] = code_value
+                elif section == "Analyzer Function" and label == "Function Analyzer":
+                    from gui.display_map import FUNCTION_ANALYZER_OPTIONS
+                    reverse_map = {v: k for k, v in FUNCTION_ANALYZER_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_map.get(display_value, display_value)
+                    settings[section][label] = code_value
+                elif section == "Analyzer Function" and label == "S/N Sequence":
+                    var = widget
+                    settings[section][label] = "ON" if var.get() else "OFF"
+                elif section == "Analyzer Function" and label == "Meas Time":
+                    from gui.display_map import MEAS_TIME_OPTIONS
+                    reverse_map = {v: k for k, v in MEAS_TIME_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_map.get(display_value, display_value)
+                    settings[section][label] = code_value
+                elif section == "Analyzer Function" and label == "Notch(Gain)":
+                    from gui.display_map import NOTCH_OPTIONS
+                    reverse_map = {v: k for k, v in NOTCH_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_map.get(display_value, display_value)
+                    settings[section][label] = code_value
+                elif section == "Analyzer Function" and label == "Filter1":
+                    from gui.display_map import FILTER1_OPTIONS
+                    reverse_map = {v: k for k, v in FILTER1_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_map.get(display_value, display_value)
+                    settings[section][label] = code_value
+                elif section == "Analyzer Function" and label == "Filter2":
+                    from gui.display_map import FILTER2_OPTIONS
+                    reverse_map = {v: k for k, v in FILTER2_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_map.get(display_value, display_value)
+                    settings[section][label] = code_value
+                elif section == "Analyzer Function" and label == "Filter3":
+                    from gui.display_map import FILTER3_OPTIONS
+                    reverse_map = {v: k for k, v in FILTER3_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_map.get(display_value, display_value)
+                    settings[section][label] = code_value
+                elif section == "Analyzer Function" and label == "Fnct Settling":
+                    from gui.display_map import FNCT_SETTLING_OPTIONS
+                    reverse_map = {v: k for k, v in FNCT_SETTLING_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_map.get(display_value, display_value)
+                elif section == "Analyzer Function" and label == "Tolerance":
+                    entry, combo = widget
+                    val = entry.get().strip()
+                    unit = combo.get().strip()
+                    settings[section][label] = f"{val} {unit}" if val else ""
+                elif section == "Analyzer Function" and label == "Resolution":
+                    entry, combo = widget
+                    val = entry.get().strip()
+                    unit = combo.get().strip()
+                    # Force unit to match combobox value exactly (prevents "DBV" if not in combobox)
+                    allowed_units = ["V", "mV", "uV", "dBV", "dBu", "W", "mW", "uW", "dBm"]
+                    if unit not in allowed_units:
+                        # Try to match ignoring case
+                        for u in allowed_units:
+                            if unit.lower() == u.lower():
+                                unit = u
+                                break
+                    settings[section][label] = f"{val} {unit}" if val else ""
+                elif section == "Analyzer Function" and label == "Timeout":
+                    entry, combo = widget
+                    val = entry.get().strip()
+                    unit_display = combo.get().strip()
+                    unit_reverse_map = {"s": "s", "ms": "ms", "μs": "us", "min": "min"}
+                    unit = unit_reverse_map.get(unit_display, unit_display)
+                    settings[section][label] = f"{val} {unit}" if val else ""
+                elif section == "Analyzer Function" and label == "Bargraph":
+                    var = widget
+                    settings[section][label] = "ON" if var.get() else "OFF"
+                elif section == "Analyzer Function" and label == "POST FFT":
+                    var = widget
+                    settings[section][label] = "ON" if var.get() else "OFF"
+                elif section == "Analyzer Function" and label == "Level Monitor":
+                    from gui.display_map import LEVEL_MONITOR_OPTIONS
+                    reverse_map = {v: k for k, v in LEVEL_MONITOR_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_map.get(display_value, display_value)
+                    settings[section][label] = code_value
+                elif section == "Analyzer Function" and label == "Second Monitor":
+                    from gui.display_map import SECOND_MONITOR_OPTIONS
+                    reverse_map = {v: k for k, v in SECOND_MONITOR_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_map.get(display_value, display_value)
+                    settings[section][label] = code_value
+                elif section == "Analyzer Function" and label == "Input Monitor":
+                    from gui.display_map import INPUT_MONITOR_OPTIONS
+                    reverse_map = {v: k for k, v in INPUT_MONITOR_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_map.get(display_value, display_value)
+                    settings[section][label] = code_value
+                elif section == "Analyzer Function" and label == "Freq/Phase":
+                    from gui.display_map import FREQ_OPTIONS
+                    reverse_map = {v: k for k, v in FREQ_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_map.get(display_value, display_value)
+                    settings[section][label] = code_value
+                elif section == "Analyzer Function" and label == "Waveform":
+                    var = widget
+                    settings[section][label] = "ON" if var.get() else "OFF"
                 else:
                     settings[section][label] = widget.get()
 
@@ -780,8 +1617,8 @@ class MainWindow(Frame):
             else:
                 settings["Generator Config"]["Impedance"] = "R5"
 
-            with open(SETTINGS_FILE, "w") as f:
-                json.dump(settings, f, indent=2)
+            with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+                json.dump(settings, f, indent=2, ensure_ascii=False)
 
         except Exception as e:
             messagebox.showerror("Save Error", f"Could not save settings: {e}")
@@ -808,20 +1645,89 @@ class MainWindow(Frame):
         if self.upv is None:
             messagebox.showerror("Sweep Error", "UPV is not connected.")
             return
+
+        def status_callback(msg):
+            self.update_status(msg)
+
         try:
             self.upv.timeout = 30000  # Increase timeout to 30 seconds
+            status_callback("⚙️ Preparing for single sweep...")
             self.upv.write("OUTP ON")
             self.upv.write("INIT:CONT OFF")
+
+            status_callback("▶️ Starting single sweep...")
             self.upv.write("INIT")
+
+            status_callback("⏳ Waiting for sweep to complete test...")
+            self.upv.timeout = 20000
             self.upv.query("*OPC?")
+            status_callback("✔️ Sweep completed successfully.")
             messagebox.showinfo("Sweep", "Single sweep started and completed!")
             self.fetch_data()
         except Exception as e:
+            status_callback(f"❌ Failed to start sweep: {e}")
             messagebox.showerror("Sweep Error", f"Failed to start sweep: {e}")
 
-    def prevent_combobox_scroll(self, combo):
-        def stop_scroll(event):
-            return "break"
-        combo.bind("<MouseWheel>", stop_scroll)
-        combo.bind("<Button-4>", stop_scroll)
-        combo.bind("<Button-5>", stop_scroll)
+    def bind_combobox_mousewheel(self, combo, canvas):
+        # When mouse enters combobox, disable canvas scroll; restore on leave
+        def disable_canvas_scroll(event):
+            canvas.unbind_all("<MouseWheel>")
+        def enable_canvas_scroll(event):
+            canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
+        combo.bind("<Enter>", disable_canvas_scroll)
+        combo.bind("<Leave>", enable_canvas_scroll)
+
+    def save_preset(self):
+        import json
+        from tkinter import filedialog, messagebox
+
+        # Ask user where to save the preset
+        preset_path = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json")],
+            title="Save Preset As"
+        )
+        if not preset_path:
+            return
+
+        # Read current settings from settings.json
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            current_settings = json.load(f)
+
+        # Save to the chosen preset file
+        with open(preset_path, "w", encoding="utf-8") as f:
+            json.dump(current_settings, f, indent=2, ensure_ascii=False)
+
+        messagebox.showinfo("Preset Saved", f"Preset saved to {preset_path}")
+    
+    def load_preset(self):
+        import json
+        from tkinter import filedialog, messagebox
+
+        # Ask user to select a preset file
+        preset_path = filedialog.askopenfilename(
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json")],
+            title="Load Preset"
+        )
+        if not preset_path:
+            return
+
+        try:
+            # Load the selected preset file
+            with open(preset_path, "r", encoding="utf-8") as f:
+                preset_settings = json.load(f)
+
+            # Overwrite the current settings.json with the preset
+            with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+                json.dump(preset_settings, f, indent=2, ensure_ascii=False)
+
+            # Reload the GUI to reflect the loaded preset
+            self.load_settings()
+            messagebox.showinfo("Preset Loaded", f"Preset loaded from {preset_path}")
+        except Exception as e:
+            messagebox.showerror("Load Error", f"Could not load preset: {e}")
+
+    def update_status(self, msg, color="green"):
+        self.status_label.config(text=msg, fg=color)
+        self.status_label.update_idletasks()
