@@ -64,40 +64,40 @@ class MainWindow(Frame):
         self.status_label = Label(self.left_frame, text="", fg="green")
         self.status_label.pack(pady=10)
 
-        # Centered container for settings tables
+        # Settings area fills all available space below controls
         self.center_frame = Frame(self.master)
-        self.center_frame.pack(expand=True, fill="both")
+        self.center_frame.pack(side="top", expand=True, fill="both")
+        self.center_frame.grid_rowconfigure(0, weight=1)
+        self.center_frame.grid_columnconfigure(0, weight=1)
 
-        # Scrollable area
-        canvas = Canvas(self.center_frame)
+        canvas = Canvas(self.center_frame, highlightthickness=0, bd=0)
+        canvas.grid(row=0, column=0, sticky="nsew")
         scrollbar = Scrollbar(self.center_frame, orient="vertical", command=canvas.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
         canvas.configure(yscrollcommand=scrollbar.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
 
-        self.canvas = canvas  # Save reference for later use
-
-        # --- Debugging: Log widget creation ---
+        self.canvas = canvas
         self.log_text = None
         self.log_file = None
         self.enable_logging = False
 
+        # Settings frame fills canvas and expands
         self.settings_frame = Frame(canvas)
-        window_id = canvas.create_window((0, 0), window=self.settings_frame, anchor="n")
+        window_id = canvas.create_window((0, 0), window=self.settings_frame, anchor="nw")
 
-        def center_table(event):
-            canvas_width = event.width
-            canvas.coords(window_id, canvas_width // 2, 0)
-        canvas.bind("<Configure>", center_table)
+        self.settings_frame.grid_rowconfigure(0, weight=1)
+        self.settings_frame.grid_rowconfigure(1, weight=1)
+        self.settings_frame.grid_columnconfigure(0, weight=1)
+        self.settings_frame.grid_columnconfigure(1, weight=1)
+
+        def resize_settings(event):
+            canvas.itemconfig(window_id, width=event.width)
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        canvas.bind("<Configure>", resize_settings)
 
         def _on_mousewheel(event):
             canvas.yview_scroll(int(-1*(event.delta/120)), "units")
         canvas.bind_all("<MouseWheel>", _on_mousewheel)
-
-        self.settings_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
 
         self.entries = {}
         self.load_settings()
