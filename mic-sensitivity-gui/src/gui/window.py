@@ -38,23 +38,24 @@ class MainWindow(Frame):
 
         Label(self.left_frame, text="Mic Sensitivity Control", font=("Helvetica", 16)).pack(pady=10)
 
-        # Row for Connect to UPV and Save Preset
+        # Use grid for button rows to prevent shifting
+        btn_width = 18
         button_row1 = Frame(self.left_frame)
-        button_row1.pack(pady=5, fill="x")
+        button_row1.pack(pady=5)
+        btn1 = Button(button_row1, text="Connect to UPV", command=self.connect_to_upv, width=btn_width)
+        btn2 = Button(button_row1, text="Save Preset", command=self.save_preset, width=btn_width)
+        btn1.grid(row=0, column=0, padx=(0, 8), pady=0)
+        btn2.grid(row=0, column=1, padx=(0, 0), pady=0)
 
-        btn_width = 18  # Adjust as needed for your font/UI
-
-        Button(button_row1, text="Connect to UPV", command=self.connect_to_upv, width=btn_width).pack(side="left", fill="x", expand=True)
-        Button(button_row1, text="Save Preset", command=self.save_preset, width=btn_width).pack(side="left", padx=(10, 0), fill="x", expand=True)
-
-        # Row for Apply Settings and Load Preset
         button_row2 = Frame(self.left_frame)
-        button_row2.pack(pady=5, fill="x")
+        button_row2.pack(pady=5)
+        btn3 = Button(button_row2, text="Apply Settings", command=self.apply_settings, width=btn_width)
+        btn4 = Button(button_row2, text="Load Preset", command=self.load_preset, width=btn_width)
+        btn3.grid(row=0, column=0, padx=(0, 8), pady=0)
+        btn4.grid(row=0, column=1, padx=(0, 0), pady=0)
 
-        Button(button_row2, text="Apply Settings", command=self.apply_settings, width=btn_width).pack(side="left", fill="x", expand=True)
-        Button(button_row2, text="Load Preset", command=self.load_preset, width=btn_width).pack(side="left", padx=(10, 0), fill="x", expand=True)
-
-        Button(self.left_frame, text="Start Sweep", command=self.start_sweep).pack(pady=5, fill="x")
+        btn5 = Button(self.left_frame, text="Start Sweep", command=self.start_sweep, width=btn_width)
+        btn5.pack(pady=5)
 
         # Right spacer
         self.right_spacer = Frame(self.top_frame)

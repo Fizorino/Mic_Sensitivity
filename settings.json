@@ -30,7 +30,7 @@
   },
   "Analyzer Config": {
     "Instrument Analyzer": "ANLG",
-    "Channel Analyzer": "CH1",
+    "Channel Analyzer": "CH2",
     "CH1 Coupling": "AC",
     "Bandwidth Analyzer": "B22",
     "Pre Filter": "UFIL1",
