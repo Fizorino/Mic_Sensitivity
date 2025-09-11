@@ -64,47 +64,36 @@ class MainWindow(Frame):
         self.status_label = Label(self.left_frame, text="", fg="green")
         self.status_label.pack(pady=10)
 
-        # Settings area fills all available space below controls
-        self.center_frame = Frame(self.master)
-        self.center_frame.pack(side="top", expand=True, fill="both")
-        self.center_frame.grid_rowconfigure(0, weight=1)
-        self.center_frame.grid_columnconfigure(0, weight=1)
+        # 2x2 grid container for four independently scrollable panels
+        self.grid_frame = Frame(self.master)
+        self.grid_frame.pack(side="top", expand=True, fill="both")
+        for r in range(2):
+            self.grid_frame.grid_rowconfigure(r, weight=1)
+        for c in range(2):
+            self.grid_frame.grid_columnconfigure(c, weight=1)
 
-        canvas = Canvas(self.center_frame, highlightthickness=0, bd=0)
-        canvas.grid(row=0, column=0, sticky="nsew")
-        scrollbar = Scrollbar(self.center_frame, orient="vertical", command=canvas.yview)
-        scrollbar.grid(row=0, column=1, sticky="ns")
-        canvas.configure(yscrollcommand=scrollbar.set)
-
-        self.canvas = canvas
+        # Placeholder so older methods referencing self.canvas don't break; each panel has its own canvas
+        self.canvas = None
         self.log_text = None
         self.log_file = None
         self.enable_logging = False
 
-        # Settings frame fills canvas and expands
-        self.settings_frame = Frame(canvas)
-        window_id = canvas.create_window((0, 0), window=self.settings_frame, anchor="nw")
-
-        self.settings_frame.grid_rowconfigure(0, weight=1)
-        self.settings_frame.grid_rowconfigure(1, weight=1)
-        self.settings_frame.grid_columnconfigure(0, weight=1)
-        self.settings_frame.grid_columnconfigure(1, weight=1)
-
-        def resize_settings(event):
-            canvas.itemconfig(window_id, width=event.width)
-            canvas.configure(scrollregion=canvas.bbox("all"))
-        canvas.bind("<Configure>", resize_settings)
-
-        def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        # Global scroll management
+        self.active_scroll_canvas = None  # Canvas currently under mouse
+        self._suspend_global_scroll = False  # Temporarily disable (e.g., when over combobox)
+        # Bind a single global mouse wheel handler (Windows uses <MouseWheel>)
+        self.master.bind_all("<MouseWheel>", self._on_global_mousewheel, add="+")
+        # Optional: Linux (ignored on Windows but harmless)
+        self.master.bind_all("<Button-4>", self._on_button4, add="+")
+        self.master.bind_all("<Button-5>", self._on_button5, add="+")
 
         self.entries = {}
         self.load_settings()
         self.upv = None
 
     def load_settings(self):
-        for widget in self.settings_frame.winfo_children():
+        # Clear existing panel containers (if any)
+        for widget in self.grid_frame.winfo_children():
             widget.destroy()
         self.entries.clear()
 
@@ -119,19 +108,39 @@ class MainWindow(Frame):
                 ("Analyzer Function", 1, 1)
             ]
 
-            self.settings_frame.grid_columnconfigure(0, weight=1, uniform="col")
-            self.settings_frame.grid_columnconfigure(1, weight=1, uniform="col")
-            self.settings_frame.grid_rowconfigure(0, weight=1, uniform="row")
-            self.settings_frame.grid_rowconfigure(1, weight=1, uniform="row")
-
             frames = {}
+            # Build four scrollable panels
             for section, row, col in sections:
-                frame = Frame(self.settings_frame, bd=2, relief="groove", padx=16, pady=12)
-                frame.grid(row=row, column=col, sticky="nsew", padx=32, pady=24)
-                frames[section] = frame
+                # Outer container cell
+                cell = Frame(self.grid_frame, bd=0)
+                cell.grid(row=row, column=col, sticky="nsew", padx=12, pady=12)
+                cell.grid_rowconfigure(0, weight=1)
+                cell.grid_columnconfigure(0, weight=1)
+
+                panel_canvas = Canvas(cell, highlightthickness=0, bd=1, relief="solid")
+                vscroll = Scrollbar(cell, orient="vertical", command=panel_canvas.yview)
+                panel_canvas.configure(yscrollcommand=vscroll.set)
+                panel_canvas.grid(row=0, column=0, sticky="nsew")
+                vscroll.grid(row=0, column=1, sticky="ns")
+
+                inner_frame = Frame(panel_canvas, bd=2, relief="groove", padx=16, pady=12)
+                window_id = panel_canvas.create_window((0, 0), window=inner_frame, anchor="nw")
+
+                def _make_configure_callback(pc=panel_canvas, fr=inner_frame, wid=window_id):
+                    def _on_configure(event):
+                        pc.itemconfig(wid, width=pc.winfo_width())
+                        pc.configure(scrollregion=pc.bbox("all"))
+                    return _on_configure
+                inner_frame.bind("<Configure>", _make_configure_callback())
+
+                # Activate scroll focus when pointer enters this panel
+                panel_canvas.bind("<Enter>", lambda e, pc=panel_canvas: self._activate_scroll(pc))
+                inner_frame.bind("<Enter>", lambda e, pc=panel_canvas: self._activate_scroll(pc))
+
+                frames[section] = (inner_frame, panel_canvas)
 
             for section, row, col in sections:
-                frame = frames[section]
+                frame, frame_canvas = frames[section]
                 Label(frame, text=section, font=("Helvetica", 12, "bold")).grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0,8))
                 if section in settings:
                     impedance_row = None
@@ -150,7 +159,7 @@ class MainWindow(Frame):
                             combo.grid(row=i, column=1, sticky="w", pady=2)
                             combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[("Generator Config", label)] = combo
-                            self.bind_combobox_mousewheel(combo, self.canvas)
+                            self.bind_combobox_mousewheel(combo)
                         elif section == "Generator Config" and label == "Channel Generator":
                             display_values = list(CHANNEL_GENERATOR_OPTIONS.values())
                             current_display = CHANNEL_GENERATOR_OPTIONS.get(value, value)
@@ -159,7 +168,7 @@ class MainWindow(Frame):
                             combo.grid(row=i, column=1, sticky="w", pady=2)
                             combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[("Generator Config", label)] = combo
-                            self.bind_combobox_mousewheel(combo, self.canvas)
+                            self.bind_combobox_mousewheel(combo)
                         elif section == "Generator Config" and label == "Output Type (Unbal/Bal)":
                             display_values = list(OUTPUT_TYPE_OPTIONS.values())
                             current_display = OUTPUT_TYPE_OPTIONS.get(value, value)
@@ -169,7 +178,7 @@ class MainWindow(Frame):
                             self.output_type_combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[("Generator Config", label)] = self.output_type_combo
                             output_type_row = i
-                            self.bind_combobox_mousewheel(self.output_type_combo, self.canvas)
+                            self.bind_combobox_mousewheel(self.output_type_combo)
                         elif section == "Generator Config" and label == "Common (Float/Ground)":
                             # Use Radiobuttons for GRO/FLO
                             from gui.display_map import COMMON_OPTIONS
@@ -597,7 +606,7 @@ class MainWindow(Frame):
                             combo.set(display_val)
                             combo.grid(row=i, column=1, sticky="w", pady=2)
                             combo.bind("<MouseWheel>", lambda e: "break")
-                            self.bind_combobox_mousewheel(combo, self.canvas)
+                            self.bind_combobox_mousewheel(combo)
                             self.entries[(section, label)] = (combo, filter_keys, filter_values)
                         elif section == "Generator Function" and label == "Halt":
                             from gui.display_map import HALT_OPTIONS
@@ -609,7 +618,7 @@ class MainWindow(Frame):
                             combo.grid(row=i, column=1, sticky="w", pady=2)
                             combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo, self.canvas)
+                            self.bind_combobox_mousewheel(combo)
                         elif section == "Generator Function" and label == "Equalizer":
                             import tkinter as tk
                             var = tk.StringVar()
@@ -642,7 +651,7 @@ class MainWindow(Frame):
                             combo.grid(row=i, column=1, sticky="w", pady=2)
                             combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo, self.canvas)
+                            self.bind_combobox_mousewheel(combo)
                         elif section == "Analyzer Config" and label == "Channel Analyzer":
                             from gui.display_map import CHANNEL_ANALYZER_OPTIONS
                             display_values = list(CHANNEL_ANALYZER_OPTIONS.values())
@@ -653,7 +662,7 @@ class MainWindow(Frame):
                             combo.grid(row=i, column=1, sticky="w", pady=2)
                             combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo, self.canvas)
+                            self.bind_combobox_mousewheel(combo)
                         elif section == "Analyzer Config" and label == "CH1 Coupling":
                             from gui.display_map import CH1_COUPLING_OPTIONS
                             import tkinter as tk
@@ -675,7 +684,7 @@ class MainWindow(Frame):
                             combo.grid(row=i, column=1, sticky="w", pady=2)
                             combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo, self.canvas)
+                            self.bind_combobox_mousewheel(combo)
                         elif section == "Analyzer Config" and label == "Pre Filter":
                             from gui.display_map import PRE_FILTER_OPTIONS
                             display_values = list(PRE_FILTER_OPTIONS.values())
@@ -686,7 +695,7 @@ class MainWindow(Frame):
                             combo.grid(row=i, column=1, sticky="w", pady=2)
                             combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo, self.canvas)
+                            self.bind_combobox_mousewheel(combo)
                         elif section == "Analyzer Config" and label == "CH1 Input":
                             from gui.display_map import CH1_INPUT_OPTIONS
                             display_values = list(CH1_INPUT_OPTIONS.values())
@@ -697,7 +706,7 @@ class MainWindow(Frame):
                             combo.grid(row=i, column=1, sticky="w", pady=2)
                             combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo, self.canvas)
+                            self.bind_combobox_mousewheel(combo)
                         elif section == "Analyzer Config" and label == "CH1 Impedance":
                             from gui.display_map import CH1_IMPEDANCE_OPTIONS
                             display_values = list(CH1_IMPEDANCE_OPTIONS.values())
@@ -708,7 +717,7 @@ class MainWindow(Frame):
                             combo.grid(row=i, column=1, sticky="w", pady=2)
                             combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo, self.canvas)
+                            self.bind_combobox_mousewheel(combo)
                         elif section == "Analyzer Config" and label == "CH1 Ground/Common":
                             from gui.display_map import CH1_COMMON_OPTIONS
                             import tkinter as tk
@@ -730,7 +739,7 @@ class MainWindow(Frame):
                             combo.grid(row=i, column=1, sticky="w", pady=2)
                             combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo, self.canvas)
+                            self.bind_combobox_mousewheel(combo)
                         elif section == "Analyzer Config" and label == "Ref Imped":
                             import tkinter as tk
                             import re
@@ -787,7 +796,7 @@ class MainWindow(Frame):
                             combo.grid(row=i, column=1, sticky="w", pady=2)
                             combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo, self.canvas)
+                            self.bind_combobox_mousewheel(combo)
                         elif section == "Analyzer Config" and label == "Delay":
                             import tkinter as tk
                             import re
@@ -846,7 +855,7 @@ class MainWindow(Frame):
                             combo.grid(row=i, column=1, sticky="w", pady=2)
                             combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo, self.canvas)
+                            self.bind_combobox_mousewheel(combo)
                         elif section == "Analyzer Function" and label == "Function Analyzer":
                             from gui.display_map import FUNCTION_ANALYZER_OPTIONS
                             display_values = list(FUNCTION_ANALYZER_OPTIONS.values())
@@ -857,7 +866,7 @@ class MainWindow(Frame):
                             combo.grid(row=i, column=1, sticky="w", pady=2)
                             combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo, self.canvas)
+                            self.bind_combobox_mousewheel(combo)
                         elif section == "Analyzer Function" and label == "S/N Sequence":
                             import tkinter as tk
                             var = tk.BooleanVar()
@@ -875,7 +884,7 @@ class MainWindow(Frame):
                             combo.grid(row=i, column=1, sticky="w", pady=2)
                             combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo, self.canvas)
+                            self.bind_combobox_mousewheel(combo)
                         elif section == "Analyzer Function" and label == "Notch(Gain)":
                             from gui.display_map import NOTCH_OPTIONS
                             display_values = list(NOTCH_OPTIONS.values())
@@ -886,7 +895,7 @@ class MainWindow(Frame):
                             combo.grid(row=i, column=1, sticky="w", pady=2)
                             combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo, self.canvas)
+                            self.bind_combobox_mousewheel(combo)
                         elif section == "Analyzer Function" and label == "Filter1":
                             from gui.display_map import FILTER1_OPTIONS
                             display_values = list(FILTER1_OPTIONS.values())
@@ -897,7 +906,7 @@ class MainWindow(Frame):
                             combo.grid(row=i, column=1, sticky="w", pady=2)
                             combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo, self.canvas)
+                            self.bind_combobox_mousewheel(combo)
                         elif section == "Analyzer Function" and label == "Filter2":
                             from gui.display_map import FILTER2_OPTIONS
                             display_values = list(FILTER2_OPTIONS.values())
@@ -908,7 +917,7 @@ class MainWindow(Frame):
                             combo.grid(row=i, column=1, sticky="w", pady=2)
                             combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo, self.canvas)
+                            self.bind_combobox_mousewheel(combo)
                         elif section == "Analyzer Function" and label == "Filter3":
                             from gui.display_map import FILTER3_OPTIONS
                             display_values = list(FILTER3_OPTIONS.values())
@@ -919,7 +928,7 @@ class MainWindow(Frame):
                             combo.grid(row=i, column=1, sticky="w", pady=2)
                             combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo, self.canvas)
+                            self.bind_combobox_mousewheel(combo)
                         elif section == "Analyzer Function" and label == "Fnct Settling":
                             from gui.display_map import FNCT_SETTLING_OPTIONS
                             display_values = list(FNCT_SETTLING_OPTIONS.values())
@@ -930,7 +939,7 @@ class MainWindow(Frame):
                             combo.grid(row=i, column=1, sticky="w", pady=2)
                             combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo, self.canvas)
+                            self.bind_combobox_mousewheel(combo)
                         elif section == "Analyzer Function" and label == "Tolerance":
                             import tkinter as tk
                             import re
@@ -1153,7 +1162,7 @@ class MainWindow(Frame):
                             combo.grid(row=i, column=1, sticky="w", pady=2)
                             combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo, self.canvas)
+                            self.bind_combobox_mousewheel(combo)
                         elif section == "Analyzer Function" and label == "Second Monitor":
                             from gui.display_map import SECOND_MONITOR_OPTIONS
                             display_values = list(SECOND_MONITOR_OPTIONS.values())
@@ -1164,7 +1173,7 @@ class MainWindow(Frame):
                             combo.grid(row=i, column=1, sticky="w", pady=2)
                             combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo, self.canvas)
+                            self.bind_combobox_mousewheel(combo)
                         elif section == "Analyzer Function" and label == "Input Monitor":
                             from gui.display_map import INPUT_MONITOR_OPTIONS
                             display_values = list(INPUT_MONITOR_OPTIONS.values())
@@ -1175,7 +1184,7 @@ class MainWindow(Frame):
                             combo.grid(row=i, column=1, sticky="w", pady=2)
                             combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo, self.canvas)
+                            self.bind_combobox_mousewheel(combo)
                         elif section == "Analyzer Function" and label == "Freq/Phase":
                             from gui.display_map import FREQ_OPTIONS
                             display_values = list(FREQ_OPTIONS.values())
@@ -1186,7 +1195,7 @@ class MainWindow(Frame):
                             combo.grid(row=i, column=1, sticky="w", pady=2)
                             combo.bind("<MouseWheel>", lambda e: "break")
                             self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo, self.canvas)
+                            self.bind_combobox_mousewheel(combo)
                         elif section == "Analyzer Function" and label == "Waveform":
                             import tkinter as tk
                             var = tk.BooleanVar()
@@ -1669,14 +1678,39 @@ class MainWindow(Frame):
             status_callback(f"❌ Failed to start sweep: {e}")
             messagebox.showerror("Sweep Error", f"Failed to start sweep: {e}")
 
-    def bind_combobox_mousewheel(self, combo, canvas):
-        # When mouse enters combobox, disable canvas scroll; restore on leave
-        def disable_canvas_scroll(event):
-            canvas.unbind_all("<MouseWheel>")
-        def enable_canvas_scroll(event):
-            canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
-        combo.bind("<Enter>", disable_canvas_scroll)
-        combo.bind("<Leave>", enable_canvas_scroll)
+    def _activate_scroll(self, canvas):
+        self.active_scroll_canvas = canvas
+
+    def _on_global_mousewheel(self, event):
+        if self._suspend_global_scroll:
+            return
+        if self.active_scroll_canvas is not None:
+            delta = event.delta
+            # Windows gives multiples of 120
+            steps = int(-delta/120) if delta != 0 else 0
+            if steps != 0:
+                self.active_scroll_canvas.yview_scroll(steps, 'units')
+
+    def _on_button4(self, event):  # Linux scroll up
+        if self._suspend_global_scroll:
+            return
+        if self.active_scroll_canvas is not None:
+            self.active_scroll_canvas.yview_scroll(-1, 'units')
+
+    def _on_button5(self, event):  # Linux scroll down
+        if self._suspend_global_scroll:
+            return
+        if self.active_scroll_canvas is not None:
+            self.active_scroll_canvas.yview_scroll(1, 'units')
+
+    def bind_combobox_mousewheel(self, combo):
+        # Temporarily suspend panel scrolling when hovering over combobox to prevent panel jump
+        def on_enter(event):
+            self._suspend_global_scroll = True
+        def on_leave(event):
+            self._suspend_global_scroll = False
+        combo.bind("<Enter>", on_enter)
+        combo.bind("<Leave>", on_leave)
 
     def save_preset(self):
         import json
