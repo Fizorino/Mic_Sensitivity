@@ -109,21 +109,31 @@ class MainWindow(Frame):
             ]
 
             frames = {}
-            # Build four scrollable panels
+            # Build four scrollable panels with fixed header and subtle styling
+            header_bg = "#2c3e50"
+            header_fg = "#ffffff"
+            panel_bg = "#f7f9fa"
             for section, row, col in sections:
-                # Outer container cell
-                cell = Frame(self.grid_frame, bd=0)
-                cell.grid(row=row, column=col, sticky="nsew", padx=12, pady=12)
-                cell.grid_rowconfigure(0, weight=1)
-                cell.grid_columnconfigure(0, weight=1)
+                container = Frame(self.grid_frame, bd=1, relief="solid", background=panel_bg)
+                container.grid(row=row, column=col, sticky="nsew", padx=10, pady=10)
+                container.grid_rowconfigure(1, weight=1)
+                container.grid_columnconfigure(0, weight=1)
 
-                panel_canvas = Canvas(cell, highlightthickness=0, bd=1, relief="solid")
-                vscroll = Scrollbar(cell, orient="vertical", command=panel_canvas.yview)
+                # Header bar (fixed, not scrolling)
+                header = Frame(container, bg=header_bg)
+                header.grid(row=0, column=0, columnspan=2, sticky="ew")
+                # Reduced pady from 4 to 1 to minimize visual gap between header and scrollable content
+                Label(header, text=section, font=("Helvetica", 12, "bold"), fg=header_fg, bg=header_bg, pady=1, padx=10).pack(side="left")
+
+                # Scrollable content area
+                panel_canvas = Canvas(container, highlightthickness=0, bd=0, background=panel_bg)
+                vscroll = Scrollbar(container, orient="vertical", command=panel_canvas.yview)
                 panel_canvas.configure(yscrollcommand=vscroll.set)
-                panel_canvas.grid(row=0, column=0, sticky="nsew")
-                vscroll.grid(row=0, column=1, sticky="ns")
+                panel_canvas.grid(row=1, column=0, sticky="nsew")
+                vscroll.grid(row=1, column=1, sticky="ns")
 
-                inner_frame = Frame(panel_canvas, bd=2, relief="groove", padx=16, pady=12)
+                # Removed top padding (was pady=10). Tk padding can't be a tuple here; use single value.
+                inner_frame = Frame(panel_canvas, bd=0, background=panel_bg, padx=14, pady=0)
                 window_id = panel_canvas.create_window((0, 0), window=inner_frame, anchor="nw")
 
                 def _make_configure_callback(pc=panel_canvas, fr=inner_frame, wid=window_id):
@@ -131,7 +141,12 @@ class MainWindow(Frame):
                         pc.itemconfig(wid, width=pc.winfo_width())
                         pc.configure(scrollregion=pc.bbox("all"))
                     return _on_configure
-                inner_frame.bind("<Configure>", _make_configure_callback())
+                cb = _make_configure_callback()
+                inner_frame.bind("<Configure>", cb)
+                # Also react when canvas itself resizes (first map / window resize)
+                panel_canvas.bind("<Configure>", lambda e, f=cb: f(e))
+                # Keep a reference for manual triggering later
+                panel_canvas._recalc = cb
 
                 # Activate scroll focus when pointer enters this panel
                 panel_canvas.bind("<Enter>", lambda e, pc=panel_canvas: self._activate_scroll(pc))
@@ -141,7 +156,6 @@ class MainWindow(Frame):
 
             for section, row, col in sections:
                 frame, frame_canvas = frames[section]
-                Label(frame, text=section, font=("Helvetica", 12, "bold")).grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0,8))
                 if section in settings:
                     impedance_row = None
                     impedance_frame = None
@@ -149,8 +163,8 @@ class MainWindow(Frame):
                     if section == "Generator Config":
                         self.output_type_combo = None  # <-- Only reset for Generator Config
 
-                    for i, (label, value) in enumerate(settings[section].items(), start=1):
-                        Label(frame, text=label, anchor="w", width=22).grid(row=i, column=0, sticky="w", padx=(0,8), pady=2)
+                    for i, (label, value) in enumerate(settings[section].items(), start=0):
+                        Label(frame, text=label, anchor="w", width=22, bg=frame["background"]).grid(row=i, column=0, sticky="w", padx=(0,8), pady=2)
                         if section == "Generator Config" and label == "Instrument Generator":
                             display_values = list(INSTRUMENT_GENERATOR_OPTIONS.values())
                             current_display = INSTRUMENT_GENERATOR_OPTIONS.get(value, value)
@@ -1244,6 +1258,18 @@ class MainWindow(Frame):
                             set_impedance_widget(selected_display)
                         self.output_type_combo.bind("<<ComboboxSelected>>", on_output_type_change)
 
+            # Store frames so we can access canvases later
+            self._panel_frames = frames
+            # Force one immediate recalculation (helps on Windows where first draw is blank)
+            for _section, (inner, canvas) in frames.items():
+                if hasattr(canvas, '_recalc'):
+                    try:
+                        canvas._recalc()
+                    except Exception:
+                        pass
+            # Defer a second pass after geometry is fully settled
+            self.after(80, self._reset_all_panel_views)
+
         except Exception as e:
             messagebox.showerror("Settings Error", f"Could not load settings.json: {e}")
 
@@ -1711,6 +1737,25 @@ class MainWindow(Frame):
             self._suspend_global_scroll = False
         combo.bind("<Enter>", on_enter)
         combo.bind("<Leave>", on_leave)
+
+    def _reset_all_panel_views(self):
+        """Ensure each panel canvas shows content at the top and has proper scrollregion.
+
+        Some platforms create the canvas before children sizes are final; this forces an
+        update so the widgets are visible immediately without needing an initial scroll.
+        """
+        frames = getattr(self, '_panel_frames', {})
+        for section, (inner_frame, canvas) in frames.items():
+            try:
+                if hasattr(canvas, '_recalc'):
+                    canvas._recalc()
+                canvas.update_idletasks()
+                bbox = canvas.bbox("all")
+                if bbox:
+                    canvas.configure(scrollregion=bbox)
+                canvas.yview_moveto(0)
+            except Exception:
+                continue
 
     def save_preset(self):
         import json
