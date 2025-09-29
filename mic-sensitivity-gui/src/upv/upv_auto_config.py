@@ -29,6 +29,7 @@ command_groups = {
         "Function Generator"        : "SOUR:FUNC",
         "Low Dist"                  : "SOUR:LOWD",
         "Sweep Ctrl"                : "SOUR:SWE:CONT",
+        "Frequency"                 : "SOUR:FREQ",
         "Next Step"                 : "SOUR:SWE:NEXT",
         "X Axis"                    : "SOUR:SWE:XAX",
         "Z Axis"                    : "SOUR:SWE:ZAX",
