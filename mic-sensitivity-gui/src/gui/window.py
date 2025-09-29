@@ -2,6 +2,7 @@ from cProfile import label
 import pyvisa
 import json
 import math
+from pathlib import Path
 from tkinter import Tk, Frame, Button, Label, filedialog, messagebox, Canvas, Scrollbar
 from upv.upv_auto_config import find_upv_ip, apply_grouped_settings, fetch_and_plot_trace, load_config, save_config
 from tkinter import ttk, Entry
@@ -56,6 +57,24 @@ class MainWindow(Frame):
 
         btn5 = Button(self.left_frame, text="Start Sweep", command=self.start_sweep, width=btn_width)
         btn5.pack(pady=5)
+        self.start_sweep_btn = btn5
+
+        # Stop button for continuous sweep (disabled until a continuous sweep is started)
+        self.stop_sweep_btn = Button(
+            self.left_frame,
+            text="Stop Continuous",
+            command=self.stop_continuous_sweep,
+            width=btn_width,
+            state="disabled"
+        )
+        self.stop_sweep_btn.pack(pady=2)
+
+        # Internal state tracking for continuous sweep
+        self._continuous_active = False
+
+        # Snapshot (read-back) button
+        btn_snapshot = Button(self.left_frame, text="Snapshot Settings", command=self.snapshot_upv, width=btn_width)
+        btn_snapshot.pack(pady=2)
 
         # Right spacer
         self.right_spacer = Frame(self.top_frame)
@@ -91,6 +110,31 @@ class MainWindow(Frame):
         self.load_settings()
         self.upv = None
 
+    def _create_combo(self, parent, values, current_display, *, width=20, grid_kwargs=None, entry_key=None, store_attr=None):
+        """Utility to build a readonly ttk.Combobox with unified wheel binding.
+
+        params:
+            parent: tk container
+            values: list[str] values to display
+            current_display: value to set
+            width: combobox width
+            grid_kwargs: dict passed to grid()
+            entry_key: if provided, tuple key for self.entries registration
+            store_attr: if provided, attribute name on self to store the widget (e.g. 'output_type_combo')
+        """
+        combo = ttk.Combobox(parent, values=values, width=width, state="readonly")
+        combo.set(current_display)
+        if grid_kwargs:
+            combo.grid(**grid_kwargs)
+        # Ensure wheel events go to panel scroll
+        combo.unbind("<MouseWheel>")
+        self.bind_combobox_mousewheel(combo)
+        if entry_key is not None:
+            self.entries[entry_key] = combo
+        if store_attr:
+            setattr(self, store_attr, combo)
+        return combo
+
     def load_settings(self):
         # Clear existing panel containers (if any)
         for widget in self.grid_frame.winfo_children():
@@ -118,12 +162,17 @@ class MainWindow(Frame):
                 container.grid(row=row, column=col, sticky="nsew", padx=10, pady=10)
                 container.grid_rowconfigure(1, weight=1)
                 container.grid_columnconfigure(0, weight=1)
+                # Ensure scrollbar column (index 1) reserves space and never collapses
+                container.grid_columnconfigure(1, minsize=14)
 
                 # Header bar (fixed, not scrolling)
                 header = Frame(container, bg=header_bg)
                 header.grid(row=0, column=0, columnspan=2, sticky="ew")
-                # Reduced pady from 4 to 1 to minimize visual gap between header and scrollable content
-                Label(header, text=section, font=("Helvetica", 12, "bold"), fg=header_fg, bg=header_bg, pady=1, padx=10).pack(side="left")
+                # Header label with zero vertical padding to eliminate gap above first row
+                Label(header, text=section, font=("Helvetica", 12, "bold"), fg=header_fg, bg=header_bg, pady=0, padx=10).pack(side="left")
+                # Add a subtle 1px separator line at bottom to clearly delineate header from scroll area
+                sep = Frame(header, height=1, bg="#1b2732")
+                sep.pack(fill="x", side="bottom")
 
                 # Scrollable content area
                 panel_canvas = Canvas(container, highlightthickness=0, bd=0, background=panel_bg)
@@ -132,14 +181,38 @@ class MainWindow(Frame):
                 panel_canvas.grid(row=1, column=0, sticky="nsew")
                 vscroll.grid(row=1, column=1, sticky="ns")
 
-                # Removed top padding (was pady=10). Tk padding can't be a tuple here; use single value.
+                # Removed top padding (was pady=10). Keep standard y=0 and rely on visual separator.
                 inner_frame = Frame(panel_canvas, bd=0, background=panel_bg, padx=14, pady=0)
                 window_id = panel_canvas.create_window((0, 0), window=inner_frame, anchor="nw")
 
                 def _make_configure_callback(pc=panel_canvas, fr=inner_frame, wid=window_id):
                     def _on_configure(event):
+                        # Always ensure the embedded frame matches the current canvas width
                         pc.itemconfig(wid, width=pc.winfo_width())
-                        pc.configure(scrollregion=pc.bbox("all"))
+                        bbox = pc.bbox("all")
+                        if bbox:
+                            content_height = bbox[3] - bbox[1]
+                            canvas_height = pc.winfo_height()
+                            # Normal scrollregion update
+                            pc.configure(scrollregion=bbox)
+                            # Scenario: when the window is maximized the canvas grows taller so the
+                            # entire content may fit. If the user had previously scrolled, Tk keeps the
+                            # previous yview which produces an apparent blank gap at the top because the
+                            # content is now shorter than the visible area. Force re-alignment to the top
+                            # whenever content fits fully inside the canvas.
+                            if content_height <= canvas_height:
+                                # Keep scrollbar visibility consistent (extend region by 1px so OS themes
+                                # don't sometimes hide the thumb completely on some platforms).
+                                pc.configure(scrollregion=(0, 0, bbox[2], max(canvas_height, content_height) + 1))
+                                pc.yview_moveto(0)
+                            else:
+                                # Only pin to top once on first realization to avoid fighting user scroll.
+                                if not getattr(pc, '_initial_pinned', False):
+                                    pc.yview_moveto(0)
+                                    pc._initial_pinned = True
+                        else:
+                            # Fallback: no bbox yet; do nothing special.
+                            pass
                     return _on_configure
                 cb = _make_configure_callback()
                 inner_frame.bind("<Configure>", cb)
@@ -164,35 +237,29 @@ class MainWindow(Frame):
                         self.output_type_combo = None  # <-- Only reset for Generator Config
 
                     for i, (label, value) in enumerate(settings[section].items(), start=0):
-                        Label(frame, text=label, anchor="w", width=22, bg=frame["background"]).grid(row=i, column=0, sticky="w", padx=(0,8), pady=2)
+                        # Remove extra top gap specifically for first row in Generator Config (use int 0 not tuple)
+                        row_pady = 0 if (section == "Generator Config" and i == 0) else 2
+                        Label(frame, text=label, anchor="w", width=22, bg=frame["background"]).grid(row=i, column=0, sticky="w", padx=(0,8), pady=row_pady)
                         if section == "Generator Config" and label == "Instrument Generator":
                             display_values = list(INSTRUMENT_GENERATOR_OPTIONS.values())
                             current_display = INSTRUMENT_GENERATOR_OPTIONS.get(value, value)
-                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
-                            combo.set(current_display)
-                            combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[("Generator Config", label)] = combo
-                            self.bind_combobox_mousewheel(combo)
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": row_pady},
+                                               entry_key=("Generator Config", label))
                         elif section == "Generator Config" and label == "Channel Generator":
                             display_values = list(CHANNEL_GENERATOR_OPTIONS.values())
                             current_display = CHANNEL_GENERATOR_OPTIONS.get(value, value)
-                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
-                            combo.set(current_display)
-                            combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[("Generator Config", label)] = combo
-                            self.bind_combobox_mousewheel(combo)
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": row_pady},
+                                               entry_key=("Generator Config", label))
                         elif section == "Generator Config" and label == "Output Type (Unbal/Bal)":
                             display_values = list(OUTPUT_TYPE_OPTIONS.values())
                             current_display = OUTPUT_TYPE_OPTIONS.get(value, value)
-                            self.output_type_combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
-                            self.output_type_combo.set(current_display)
-                            self.output_type_combo.grid(row=i, column=1, sticky="w", pady=2)
-                            self.output_type_combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[("Generator Config", label)] = self.output_type_combo
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": row_pady},
+                                               entry_key=("Generator Config", label),
+                                               store_attr="output_type_combo")
                             output_type_row = i
-                            self.bind_combobox_mousewheel(self.output_type_combo)
                         elif section == "Generator Config" and label == "Common (Float/Ground)":
                             # Use Radiobuttons for GRO/FLO
                             from gui.display_map import COMMON_OPTIONS
@@ -200,7 +267,7 @@ class MainWindow(Frame):
                             self.common_var = tk.StringVar()
                             self.common_var.set(value if value in COMMON_OPTIONS else "GRO")
                             radio_frame = Frame(frame)
-                            radio_frame.grid(row=i, column=1, sticky="w", pady=2)
+                            radio_frame.grid(row=i, column=1, sticky="w", pady=row_pady)
                             for code, display in COMMON_OPTIONS.items():
                                 rb = ttk.Radiobutton(radio_frame, text=display, variable=self.common_var, value=code)
                                 rb.pack(side="left", padx=5)
@@ -212,20 +279,17 @@ class MainWindow(Frame):
                         elif section == "Generator Config" and label == "Bandwidth Generator":
                             from gui.display_map import BANDWIDTH_GENERATOR_OPTIONS
                             display_values = list(BANDWIDTH_GENERATOR_OPTIONS.values())
-                            # Try to get display value from code, else use as is
                             current_display = BANDWIDTH_GENERATOR_OPTIONS.get(value, value)
-                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
-                            combo.set(current_display)
-                            combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[("Generator Config", label)] = combo
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": row_pady},
+                                               entry_key=("Generator Config", label))
                         elif section == "Generator Config" and label == "Volt Range (Auto/Fix)":
                             from gui.display_map import VOLT_RANGE_OPTIONS
                             import tkinter as tk
                             self.volt_range_var = tk.StringVar()
                             self.volt_range_var.set(value if value in VOLT_RANGE_OPTIONS else "AUTO")
                             radio_frame = Frame(frame)
-                            radio_frame.grid(row=i, column=1, sticky="w", pady=2)
+                            radio_frame.grid(row=i, column=1, sticky="w", pady=row_pady)
                             for code, display in VOLT_RANGE_OPTIONS.items():
                                 rb = ttk.Radiobutton(radio_frame, text=display, variable=self.volt_range_var, value=code)
                                 rb.pack(side="left", padx=5)
@@ -243,7 +307,7 @@ class MainWindow(Frame):
                                 val_part = val_str
                                 unit_part = unit_options[0]
                             hv_frame = Frame(frame)
-                            hv_frame.grid(row=i, column=1, sticky="w", pady=2)
+                            hv_frame.grid(row=i, column=1, sticky="w", pady=row_pady)
                             entry = Entry(hv_frame, width=22)
                             entry.insert(0, val_part)
                             entry.pack(side="left", padx=(0, 8))
@@ -294,7 +358,8 @@ class MainWindow(Frame):
                                 combo._last_unit = new_unit
                             combo._last_unit = unit_part
                             combo.bind('<<ComboboxSelected>>', convert_voltage_unit)
-                            combo.bind("<MouseWheel>", lambda e: "break")
+                            combo.unbind("<MouseWheel>")
+                            self.bind_combobox_mousewheel(combo)
                             self.entries[(section, label)] = (entry, combo)
                         elif section == "Generator Config" and label == "Ref Voltage":
                             # Same as Max Voltage: value + unit
@@ -309,7 +374,7 @@ class MainWindow(Frame):
                                 val_part = val_str
                                 unit_part = unit_options[0]
                             hv_frame = Frame(frame)
-                            hv_frame.grid(row=i, column=1, sticky="w", pady=2)
+                            hv_frame.grid(row=i, column=1, sticky="w", pady=row_pady)
                             entry = Entry(hv_frame, width=22)
                             entry.insert(0, val_part)
                             entry.pack(side="left", padx=(0, 8))
@@ -358,7 +423,8 @@ class MainWindow(Frame):
                                 combo._last_unit = new_unit
                             combo._last_unit = unit_part
                             combo.bind('<<ComboboxSelected>>', convert_voltage_unit)
-                            combo.bind("<MouseWheel>", lambda e: "break")
+                            combo.unbind("<MouseWheel>")
+                            self.bind_combobox_mousewheel(combo)
                             self.entries[(section, label)] = (entry, combo)
                         elif section == "Generator Config" and label == "Ref Frequency":
                             # Value + unit, only Hz and kHz
@@ -373,7 +439,7 @@ class MainWindow(Frame):
                                 val_part = val_str
                                 unit_part = unit_options[0]
                             hv_frame = Frame(frame)
-                            hv_frame.grid(row=i, column=1, sticky="w", pady=2)
+                            hv_frame.grid(row=i, column=1, sticky="w", pady=row_pady)
                             entry = Entry(hv_frame, width=22)
                             entry.insert(0, val_part)
                             entry.pack(side="left", padx=(0, 8))
@@ -396,7 +462,8 @@ class MainWindow(Frame):
                                 combo._last_unit = new_unit
                             combo._last_unit = unit_part
                             combo.bind('<<ComboboxSelected>>', convert_freq_unit)
-                            combo.bind("<MouseWheel>", lambda e: "break")
+                            combo.unbind("<MouseWheel>")
+                            self.bind_combobox_mousewheel(combo)
                             self.entries[(section, label)] = (entry, combo)
                         elif label == "Low Dist":
                             import tkinter as tk
@@ -412,63 +479,45 @@ class MainWindow(Frame):
                         elif section == "Generator Function" and label == "Function Generator":
                             from gui.display_map import FUNCTION_GENERATOR_OPTIONS
                             display_values = list(FUNCTION_GENERATOR_OPTIONS.values())
-                            reverse_map = {v: k for k, v in FUNCTION_GENERATOR_OPTIONS.items()}
                             current_display = FUNCTION_GENERATOR_OPTIONS.get(value, value)
-                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
-                            combo.set(current_display)
-                            combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[(section, label)] = combo
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                               entry_key=(section, label))
                         elif section == "Generator Function" and label == "Sweep Ctrl":
                             from gui.display_map import SWEEP_CTRL_OPTIONS
                             display_values = list(SWEEP_CTRL_OPTIONS.values())
-                            reverse_map = {v: k for k, v in SWEEP_CTRL_OPTIONS.items()}
                             current_display = SWEEP_CTRL_OPTIONS.get(value, value)
-                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
-                            combo.set(current_display)
-                            combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[(section, label)] = combo
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                               entry_key=(section, label))
                         elif section == "Generator Function" and label == "Next Step":
                             from gui.display_map import NEXT_STEP_OPTIONS
                             display_values = list(NEXT_STEP_OPTIONS.values())
-                            reverse_map = {v: k for k, v in NEXT_STEP_OPTIONS.items()}
                             current_display = NEXT_STEP_OPTIONS.get(value, value)
-                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
-                            combo.set(current_display)
-                            combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[(section, label)] = combo
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                               entry_key=(section, label))
                         elif section == "Generator Function" and label == "X Axis":
                             from gui.display_map import X_AXIS_OPTIONS
                             display_values = list(X_AXIS_OPTIONS.values())
-                            reverse_map = {v: k for k, v in X_AXIS_OPTIONS.items()}
                             current_display = X_AXIS_OPTIONS.get(value, value)
-                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
-                            combo.set(current_display)
-                            combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[(section, label)] = combo
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                               entry_key=(section, label))
                         elif section == "Generator Function" and label == "Z Axis":
                             from gui.display_map import Z_AXIS_OPTIONS
                             display_values = list(Z_AXIS_OPTIONS.values())
-                            reverse_map = {v: k for k, v in Z_AXIS_OPTIONS.items()}
                             current_display = Z_AXIS_OPTIONS.get(value, value)
-                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
-                            combo.set(current_display)
-                            combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[(section, label)] = combo
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                               entry_key=(section, label))
                         elif section == "Generator Function" and label == "Spacing":
                             from gui.display_map import SPACING_OPTIONS
                             display_values = list(SPACING_OPTIONS.values())
-                            reverse_map = {v: k for k, v in SPACING_OPTIONS.items()}
                             current_display = SPACING_OPTIONS.get(value, value)
-                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
-                            combo.set(current_display)
-                            combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[(section, label)] = combo
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                               entry_key=(section, label))
                         elif section == "Generator Function" and label in ("Start", "Stop"):
                             import re
                             unit_options = ["Hz", "kHz"]
@@ -504,7 +553,8 @@ class MainWindow(Frame):
                                 combo._last_unit = new_unit
                             combo._last_unit = unit_part
                             combo.bind('<<ComboboxSelected>>', convert_freq_unit)
-                            combo.bind("<MouseWheel>", lambda e: "break")
+                            combo.unbind("<MouseWheel>")
+                            self.bind_combobox_mousewheel(combo)
                             self.entries[(section, label)] = (entry, combo)
                         elif section == "Generator Function" and label == "Voltage":
                             # Same as Max Voltage: value + unit
@@ -605,7 +655,8 @@ class MainWindow(Frame):
 
                             combo._last_unit = unit_part
                             combo.bind('<<ComboboxSelected>>', convert_voltage_unit)
-                            combo.bind("<MouseWheel>", lambda e: "break")
+                            combo.unbind("<MouseWheel>")
+                            self.bind_combobox_mousewheel(combo)
                             self.entries[(section, label)] = (entry, combo)
                         elif section == "Generator Function" and label == "Filter":
                             from gui.display_map import FILTER_OPTIONS
@@ -619,7 +670,7 @@ class MainWindow(Frame):
                             combo = ttk.Combobox(frame, values=filter_values, width=20, state="readonly")
                             combo.set(display_val)
                             combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
+                            combo.unbind("<MouseWheel>")
                             self.bind_combobox_mousewheel(combo)
                             self.entries[(section, label)] = (combo, filter_keys, filter_values)
                         elif section == "Generator Function" and label == "Halt":
@@ -630,7 +681,7 @@ class MainWindow(Frame):
                             combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
                             combo.set(current_display)
                             combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
+                            combo.unbind("<MouseWheel>")
                             self.entries[(section, label)] = combo
                             self.bind_combobox_mousewheel(combo)
                         elif section == "Generator Function" and label == "Equalizer":
@@ -658,25 +709,17 @@ class MainWindow(Frame):
                         elif section == "Analyzer Config" and label == "Instrument Analyzer":
                             from gui.display_map import INSTRUMENT_ANALYZER_OPTIONS
                             display_values = list(INSTRUMENT_ANALYZER_OPTIONS.values())
-                            reverse_map = {v: k for k, v in INSTRUMENT_ANALYZER_OPTIONS.items()}
                             current_display = INSTRUMENT_ANALYZER_OPTIONS.get(value, value)
-                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
-                            combo.set(current_display)
-                            combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo)
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                               entry_key=(section, label))
                         elif section == "Analyzer Config" and label == "Channel Analyzer":
                             from gui.display_map import CHANNEL_ANALYZER_OPTIONS
                             display_values = list(CHANNEL_ANALYZER_OPTIONS.values())
-                            reverse_map = {v: k for k, v in CHANNEL_ANALYZER_OPTIONS.items()}
                             current_display = CHANNEL_ANALYZER_OPTIONS.get(value, value)
-                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
-                            combo.set(current_display)
-                            combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo)
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                               entry_key=(section, label))
                         elif section == "Analyzer Config" and label == "CH1 Coupling":
                             from gui.display_map import CH1_COUPLING_OPTIONS
                             import tkinter as tk
@@ -691,47 +734,31 @@ class MainWindow(Frame):
                         elif section == "Analyzer Config" and label == "Bandwidth Analyzer":
                             from gui.display_map import BANDWIDTH_ANALYZER_OPTIONS
                             display_values = list(BANDWIDTH_ANALYZER_OPTIONS.values())
-                            reverse_map = {v: k for k, v in BANDWIDTH_ANALYZER_OPTIONS.items()}
                             current_display = BANDWIDTH_ANALYZER_OPTIONS.get(value, value)
-                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
-                            combo.set(current_display)
-                            combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo)
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                               entry_key=(section, label))
                         elif section == "Analyzer Config" and label == "Pre Filter":
                             from gui.display_map import PRE_FILTER_OPTIONS
                             display_values = list(PRE_FILTER_OPTIONS.values())
-                            reverse_map = {v: k for k, v in PRE_FILTER_OPTIONS.items()}
                             current_display = PRE_FILTER_OPTIONS.get(value, value)
-                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
-                            combo.set(current_display)
-                            combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo)
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                               entry_key=(section, label))
                         elif section == "Analyzer Config" and label == "CH1 Input":
                             from gui.display_map import CH1_INPUT_OPTIONS
                             display_values = list(CH1_INPUT_OPTIONS.values())
-                            reverse_map = {v: k for k, v in CH1_INPUT_OPTIONS.items()}
                             current_display = CH1_INPUT_OPTIONS.get(value, value)
-                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
-                            combo.set(current_display)
-                            combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo)
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                               entry_key=(section, label))
                         elif section == "Analyzer Config" and label == "CH1 Impedance":
                             from gui.display_map import CH1_IMPEDANCE_OPTIONS
                             display_values = list(CH1_IMPEDANCE_OPTIONS.values())
-                            reverse_map = {v: k for k, v in CH1_IMPEDANCE_OPTIONS.items()}
                             current_display = CH1_IMPEDANCE_OPTIONS.get(value, value)
-                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
-                            combo.set(current_display)
-                            combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo)
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                               entry_key=(section, label))
                         elif section == "Analyzer Config" and label == "CH1 Ground/Common":
                             from gui.display_map import CH1_COMMON_OPTIONS
                             import tkinter as tk
@@ -746,14 +773,10 @@ class MainWindow(Frame):
                         elif section == "Analyzer Config" and label == "CH1 Range":
                             from gui.display_map import CH1_RANGE_OPTIONS
                             display_values = list(CH1_RANGE_OPTIONS.values())
-                            reverse_map = {v: k for k, v in CH1_RANGE_OPTIONS.items()}
                             current_display = CH1_RANGE_OPTIONS.get(value, value)
-                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
-                            combo.set(current_display)
-                            combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo)
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                               entry_key=(section, label))
                         elif section == "Analyzer Config" and label == "Ref Imped":
                             import tkinter as tk
                             import re
@@ -798,19 +821,16 @@ class MainWindow(Frame):
                                 combo._last_unit = new_unit
                             combo._last_unit = unit_part
                             combo.bind('<<ComboboxSelected>>', convert_impedance_unit)
-                            combo.bind("<MouseWheel>", lambda e: "break")
+                            combo.unbind("<MouseWheel>")
+                            self.bind_combobox_mousewheel(combo)
                             self.entries[(section, label)] = (entry, combo)
                         elif section == "Analyzer Config" and label == "Start Cond":
                             from gui.display_map import START_COND_OPTIONS
                             display_values = list(START_COND_OPTIONS.values())
-                            reverse_map = {v: k for k, v in START_COND_OPTIONS.items()}
                             current_display = START_COND_OPTIONS.get(value, value)
-                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
-                            combo.set(current_display)
-                            combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo)
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                               entry_key=(section, label))
                         elif section == "Analyzer Config" and label == "Delay":
                             import tkinter as tk
                             import re
@@ -857,30 +877,24 @@ class MainWindow(Frame):
                                 combo._last_unit = new_unit_display
                             combo._last_unit = unit_part
                             combo.bind('<<ComboboxSelected>>', convert_delay_unit)
-                            combo.bind("<MouseWheel>", lambda e: "break")
+                            combo.unbind("<MouseWheel>")
+                            self.bind_combobox_mousewheel(combo)
                             self.entries[(section, label)] = (entry, combo)
                         elif section == "Analyzer Config" and label == "MAX FFT Size":
                             from gui.display_map import MAX_FFT_SIZE_OPTIONS
                             display_values = list(MAX_FFT_SIZE_OPTIONS.values())
-                            reverse_map = {v: k for k, v in MAX_FFT_SIZE_OPTIONS.items()}
                             current_display = MAX_FFT_SIZE_OPTIONS.get(value, value)
-                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
-                            combo.set(current_display)
-                            combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo)
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                               entry_key=(section, label))
                         elif section == "Analyzer Function" and label == "Function Analyzer":
                             from gui.display_map import FUNCTION_ANALYZER_OPTIONS
                             display_values = list(FUNCTION_ANALYZER_OPTIONS.values())
-                            reverse_map = {v: k for k, v in FUNCTION_ANALYZER_OPTIONS.items()}
                             current_display = FUNCTION_ANALYZER_OPTIONS.get(value, value)
-                            combo = ttk.Combobox(frame, values=display_values, width=24, state="readonly")
-                            combo.set(current_display)
-                            combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo)
+                            self._create_combo(frame, display_values, current_display,
+                                               width=24,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                               entry_key=(section, label))
                         elif section == "Analyzer Function" and label == "S/N Sequence":
                             import tkinter as tk
                             var = tk.BooleanVar()
@@ -891,69 +905,45 @@ class MainWindow(Frame):
                         elif section == "Analyzer Function" and label == "Meas Time":
                             from gui.display_map import MEAS_TIME_OPTIONS
                             display_values = list(MEAS_TIME_OPTIONS.values())
-                            reverse_map = {v: k for k, v in MEAS_TIME_OPTIONS.items()}
                             current_display = MEAS_TIME_OPTIONS.get(value, value)
-                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
-                            combo.set(current_display)
-                            combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo)
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                               entry_key=(section, label))
                         elif section == "Analyzer Function" and label == "Notch(Gain)":
                             from gui.display_map import NOTCH_OPTIONS
                             display_values = list(NOTCH_OPTIONS.values())
-                            reverse_map = {v: k for k, v in NOTCH_OPTIONS.items()}
                             current_display = NOTCH_OPTIONS.get(value, value)
-                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
-                            combo.set(current_display)
-                            combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo)
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                               entry_key=(section, label))
                         elif section == "Analyzer Function" and label == "Filter1":
                             from gui.display_map import FILTER1_OPTIONS
                             display_values = list(FILTER1_OPTIONS.values())
-                            reverse_map = {v: k for k, v in FILTER1_OPTIONS.items()}
                             current_display = FILTER1_OPTIONS.get(value, value)
-                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
-                            combo.set(current_display)
-                            combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo)
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                               entry_key=(section, label))
                         elif section == "Analyzer Function" and label == "Filter2":
                             from gui.display_map import FILTER2_OPTIONS
                             display_values = list(FILTER2_OPTIONS.values())
-                            reverse_map = {v: k for k, v in FILTER2_OPTIONS.items()}
                             current_display = FILTER2_OPTIONS.get(value, value)
-                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
-                            combo.set(current_display)
-                            combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo)
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                               entry_key=(section, label))
                         elif section == "Analyzer Function" and label == "Filter3":
                             from gui.display_map import FILTER3_OPTIONS
                             display_values = list(FILTER3_OPTIONS.values())
-                            reverse_map = {v: k for k, v in FILTER3_OPTIONS.items()}
                             current_display = FILTER3_OPTIONS.get(value, value)
-                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
-                            combo.set(current_display)
-                            combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo)
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                               entry_key=(section, label))
                         elif section == "Analyzer Function" and label == "Fnct Settling":
                             from gui.display_map import FNCT_SETTLING_OPTIONS
                             display_values = list(FNCT_SETTLING_OPTIONS.values())
-                            reverse_map = {v: k for k, v in FNCT_SETTLING_OPTIONS.items()}
                             current_display = FNCT_SETTLING_OPTIONS.get(value, value)
-                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
-                            combo.set(current_display)
-                            combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo)
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                               entry_key=(section, label))
                         elif section == "Analyzer Function" and label == "Tolerance":
                             import tkinter as tk
                             import re
@@ -1002,7 +992,8 @@ class MainWindow(Frame):
 
                             combo._last_unit = unit_part
                             combo.bind('<<ComboboxSelected>>', convert_tolerance_unit)
-                            combo.bind("<MouseWheel>", lambda e: "break")
+                            combo.unbind("<MouseWheel>")
+                            self.bind_combobox_mousewheel(combo)
                             self.entries[(section, label)] = (entry, combo)
                         elif section == "Analyzer Function" and label == "Resolution":
                             import tkinter as tk
@@ -1103,7 +1094,8 @@ class MainWindow(Frame):
 
                             combo._last_unit = unit_part
                             combo.bind('<<ComboboxSelected>>', convert_resolution_unit)
-                            combo.bind("<MouseWheel>", lambda e: "break")
+                            combo.unbind("<MouseWheel>")
+                            self.bind_combobox_mousewheel(combo)
                             self.entries[(section, label)] = (entry, combo)
                         elif section == "Analyzer Function" and label == "Timeout":
                             import tkinter as tk
@@ -1150,7 +1142,8 @@ class MainWindow(Frame):
                                 combo._last_unit = new_unit_display
                             combo._last_unit = unit_part
                             combo.bind('<<ComboboxSelected>>', convert_timeout_unit)
-                            combo.bind("<MouseWheel>", lambda e: "break")
+                            combo.unbind("<MouseWheel>")
+                            self.bind_combobox_mousewheel(combo)
                             self.entries[(section, label)] = (entry, combo)
                         elif section == "Analyzer Function" and label == "Bargraph":
                             import tkinter as tk
@@ -1169,47 +1162,31 @@ class MainWindow(Frame):
                         elif section == "Analyzer Function" and label == "Level Monitor":
                             from gui.display_map import LEVEL_MONITOR_OPTIONS
                             display_values = list(LEVEL_MONITOR_OPTIONS.values())
-                            reverse_map = {v: k for k, v in LEVEL_MONITOR_OPTIONS.items()}
                             current_display = LEVEL_MONITOR_OPTIONS.get(value, value)
-                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
-                            combo.set(current_display)
-                            combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo)
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                               entry_key=(section, label))
                         elif section == "Analyzer Function" and label == "Second Monitor":
                             from gui.display_map import SECOND_MONITOR_OPTIONS
                             display_values = list(SECOND_MONITOR_OPTIONS.values())
-                            reverse_map = {v: k for k, v in SECOND_MONITOR_OPTIONS.items()}
                             current_display = SECOND_MONITOR_OPTIONS.get(value, value)
-                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
-                            combo.set(current_display)
-                            combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo)
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                               entry_key=(section, label))
                         elif section == "Analyzer Function" and label == "Input Monitor":
                             from gui.display_map import INPUT_MONITOR_OPTIONS
                             display_values = list(INPUT_MONITOR_OPTIONS.values())
-                            reverse_map = {v: k for k, v in INPUT_MONITOR_OPTIONS.items()}
                             current_display = INPUT_MONITOR_OPTIONS.get(value, value)
-                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
-                            combo.set(current_display)
-                            combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo)
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                               entry_key=(section, label))
                         elif section == "Analyzer Function" and label == "Freq/Phase":
                             from gui.display_map import FREQ_OPTIONS
                             display_values = list(FREQ_OPTIONS.values())
-                            reverse_map = {v: k for k, v in FREQ_OPTIONS.items()}
                             current_display = FREQ_OPTIONS.get(value, value)
-                            combo = ttk.Combobox(frame, values=display_values, width=20, state="readonly")
-                            combo.set(current_display)
-                            combo.grid(row=i, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
-                            self.entries[(section, label)] = combo
-                            self.bind_combobox_mousewheel(combo)
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                               entry_key=(section, label))
                         elif section == "Analyzer Function" and label == "Waveform":
                             import tkinter as tk
                             var = tk.BooleanVar()
@@ -1244,8 +1221,9 @@ class MainWindow(Frame):
                             combo = ttk.Combobox(self.impedance_frame, values=display_values, width=20, state="readonly")
                             combo.set(current_display)
                             combo.grid(row=self.impedance_row, column=1, sticky="w", pady=2)
-                            combo.bind("<MouseWheel>", lambda e: "break")
+                            combo.unbind("<MouseWheel>")
                             self.entries[("Generator Config", "Impedance")] = combo
+                            self.bind_combobox_mousewheel(combo)
 
                     # Initial setup for Impedance widget
                     if self.output_type_combo:
@@ -1686,23 +1664,162 @@ class MainWindow(Frame):
             self.update_status(msg)
 
         try:
+            continuous = self._is_continuous_sweep_enabled()
             self.upv.timeout = 30000  # Increase timeout to 30 seconds
-            status_callback("⚙️ Preparing for single sweep...")
+            status_callback("⚙️ Preparing for {} sweep...".format("continuous" if continuous else "single"))
             self.upv.write("OUTP ON")
-            self.upv.write("INIT:CONT OFF")
+            # Honor preset override (continuous has higher priority if specified in JSON)
+            if continuous:
+                self.upv.write("INIT:CONT ON")
+            else:
+                self.upv.write("INIT:CONT OFF")
 
-            status_callback("▶️ Starting single sweep...")
+            status_callback("▶️ Starting {} sweep...".format("continuous" if continuous else "single"))
             self.upv.write("INIT")
 
-            status_callback("⏳ Waiting for sweep to complete test...")
-            self.upv.timeout = 20000
-            self.upv.query("*OPC?")
-            status_callback("✔️ Sweep completed successfully.")
-            messagebox.showinfo("Sweep", "Single sweep started and completed!")
-            self.fetch_data()
+            if continuous:
+                # In continuous mode we don't wait for *OPC? completion; user can stop externally
+                status_callback("🔄 Continuous sweep running (preset override).")
+                messagebox.showinfo("Sweep", "Continuous sweep started (from preset).")
+                self._continuous_active = True
+                # Toggle buttons
+                if hasattr(self, 'start_sweep_btn'):
+                    self.start_sweep_btn.config(state="disabled")
+                if hasattr(self, 'stop_sweep_btn'):
+                    self.stop_sweep_btn.config(state="normal")
+            else:
+                status_callback("⏳ Waiting for sweep to complete test...")
+                self.upv.timeout = 20000
+                self.upv.query("*OPC?")
+                status_callback("✔️ Sweep completed successfully.")
+                messagebox.showinfo("Sweep", "Single sweep started and completed!")
+                self.fetch_data()
+                # Ensure stop button remains disabled after single sweep
+                self._continuous_active = False
+                if hasattr(self, 'stop_sweep_btn'):
+                    self.stop_sweep_btn.config(state="disabled")
+                if hasattr(self, 'start_sweep_btn'):
+                    self.start_sweep_btn.config(state="normal")
         except Exception as e:
             status_callback(f"❌ Failed to start sweep: {e}")
             messagebox.showerror("Sweep Error", f"Failed to start sweep: {e}")
+            # Attempt to restore button states safely
+            self._continuous_active = False
+            if hasattr(self, 'stop_sweep_btn'):
+                self.stop_sweep_btn.config(state="disabled")
+            if hasattr(self, 'start_sweep_btn'):
+                self.start_sweep_btn.config(state="normal")
+
+    def stop_continuous_sweep(self):
+        """Stop an active continuous sweep and fetch current data."""
+        if self.upv is None:
+            messagebox.showerror("Sweep Error", "UPV is not connected.")
+            return
+        if not self._continuous_active:
+            messagebox.showinfo("Sweep", "No continuous sweep is currently running.")
+            return
+        try:
+            self.update_status("⏹ Stopping continuous sweep...")
+            # Turn off continuous mode; this stops further automatic re-triggers
+            self.upv.write("INIT:CONT OFF")
+            # Optional abort (ignore if unsupported)
+            try:
+                self.upv.write("ABOR")
+            except Exception:
+                pass
+            # Small confirmation wait (best-effort)
+            prev_timeout = getattr(self.upv, 'timeout', 2000)
+            try:
+                self.upv.timeout = 5000
+                try:
+                    self.upv.query("*OPC?")
+                except Exception:
+                    pass
+            finally:
+                self.upv.timeout = prev_timeout
+            self._continuous_active = False
+            if hasattr(self, 'stop_sweep_btn'):
+                self.stop_sweep_btn.config(state="disabled")
+            if hasattr(self, 'start_sweep_btn'):
+                self.start_sweep_btn.config(state="normal")
+            self.update_status("✅ Continuous sweep stopped.")
+            # Offer immediate data fetch
+            try:
+                self.fetch_data()
+            except Exception:
+                pass
+            messagebox.showinfo("Sweep", "Continuous sweep stopped.")
+        except Exception as e:
+            self.update_status(f"❌ Failed to stop sweep: {e}", color="red")
+            messagebox.showerror("Sweep Error", f"Failed to stop continuous sweep: {e}")
+
+    def snapshot_upv(self):
+        """Capture current UPV settings and save them to a JSON snapshot file.
+
+        Prompts user for a destination path; if cancelled, does nothing.
+        Utilises upv_readback.save_settings_snapshot to produce a JSON that
+        mirrors the grouped settings structure (code values)."""
+        if self.upv is None:
+            messagebox.showerror("Snapshot Error", "UPV is not connected.")
+            return
+        try:
+            from upv.upv_readback import save_settings_snapshot
+            # Ask user where to save snapshot
+            dest = filedialog.asksaveasfilename(
+                defaultextension=".json",
+                filetypes=[("JSON files", "*.json")],
+                title="Save UPV Settings Snapshot As",
+                initialfile=".json"
+            )
+            if not dest:
+                self.update_status("Snapshot cancelled.", color="orange")
+                return
+            out_path = save_settings_snapshot(self.upv, Path(dest))
+            self.update_status(f"Snapshot saved: {out_path.name}")
+            messagebox.showinfo("Snapshot Saved", f"Settings snapshot saved to:\n{out_path}")
+        except Exception as e:
+            self.update_status("Snapshot failed", color="red")
+            messagebox.showerror("Snapshot Error", f"Failed to create snapshot: {e}")
+
+    def _is_continuous_sweep_enabled(self):
+        """Determine if preset/settings JSON requests continuous sweep (INIT:CONT ON).
+
+        Priority order / accepted forms (case-insensitive):
+          1. Top-level key "INIT:CONT": "ON" | "OFF"
+          2. Top-level key "SweepMode": "CONT" / "CONTINUOUS" / "ON" (anything else = single)
+          3. Top-level key "ContinuousSweep": true/false
+
+        Example additions to preset JSON (any ONE of these):
+          { "INIT:CONT": "ON" }
+          { "SweepMode": "CONT" }
+          { "ContinuousSweep": true }
+
+        Returns True if continuous sweep requested, False otherwise.
+        """
+        try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception:
+            return False
+
+        # 1. Explicit SCPI style key
+        init_cont = data.get("INIT:CONT")
+        if isinstance(init_cont, str) and init_cont.strip().upper() == "ON":
+            return True
+        if isinstance(init_cont, str) and init_cont.strip().upper() == "OFF":
+            return False
+
+        # 2. Mode key
+        sweep_mode = data.get("SweepMode")
+        if isinstance(sweep_mode, str) and sweep_mode.strip().upper() in {"CONT", "CONTINUOUS", "ON"}:
+            return True
+
+        # 3. Boolean helper key
+        cont_flag = data.get("ContinuousSweep")
+        if isinstance(cont_flag, bool):
+            return cont_flag
+
+        return False
 
     def _activate_scroll(self, canvas):
         self.active_scroll_canvas = canvas
@@ -1730,13 +1847,25 @@ class MainWindow(Frame):
             self.active_scroll_canvas.yview_scroll(1, 'units')
 
     def bind_combobox_mousewheel(self, combo):
-        # Temporarily suspend panel scrolling when hovering over combobox to prevent panel jump
-        def on_enter(event):
-            self._suspend_global_scroll = True
-        def on_leave(event):
-            self._suspend_global_scroll = False
-        combo.bind("<Enter>", on_enter)
-        combo.bind("<Leave>", on_leave)
+        """Allow scrolling the parent panel even while mouse is over a readonly Combobox.
+
+        Previous implementation suspended global scroll to avoid accidental panel movement while
+        the user intended to use the combobox. However, since all comboboxes are readonly and we
+        also block their own default mousewheel behavior, it's more user-friendly to keep panel
+        scrolling active. We intercept the wheel event, manually scroll the active canvas, then
+        return 'break' so the combobox selection doesn't change.
+        """
+
+        def on_mousewheel(event):
+            # Ensure we have an active canvas (should be set when entering panel/inner frame)
+            if self.active_scroll_canvas is not None:
+                delta = event.delta
+                steps = int(-delta/120) if delta != 0 else 0
+                if steps != 0:
+                    self.active_scroll_canvas.yview_scroll(steps, 'units')
+            return 'break'  # Prevent combobox value cycling
+
+        combo.bind('<MouseWheel>', on_mousewheel, add='+')
 
     def _reset_all_panel_views(self):
         """Ensure each panel canvas shows content at the top and has proper scrollregion.

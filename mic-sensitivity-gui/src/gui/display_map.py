@@ -140,7 +140,9 @@ CHANNEL_GENERATOR_OPTIONS = {
 }
 
 OUTPUT_TYPE_OPTIONS = {
+    "UNB": "Unbal",
     "UNBalanced": "Unbal",
+    
     "BALanced": "Bal"
 }
 IMPEDANCE_OPTIONS_BAL = {
