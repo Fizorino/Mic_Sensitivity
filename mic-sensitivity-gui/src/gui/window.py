@@ -11,7 +11,8 @@ from gui.display_map import (
     CHANNEL_GENERATOR_OPTIONS,
     OUTPUT_TYPE_OPTIONS,
     IMPEDANCE_OPTIONS_BAL,
-    IMPEDANCE_OPTIONS_UNBAL
+    IMPEDANCE_OPTIONS_UNBAL,
+    DISPLAY_LABEL_OVERRIDES
 )
 
 SETTINGS_FILE = r"c:\Users\AU001A0W\OneDrive - WSA\Documents\Mic_Sensitivity\settings.json"
@@ -58,6 +59,9 @@ class MainWindow(Frame):
         btn5 = Button(self.left_frame, text="Start Sweep", command=self.start_sweep, width=btn_width)
         btn5.pack(pady=5)
         self.start_sweep_btn = btn5
+        # Require Apply Settings before allowing sweep start
+        self._settings_applied = False
+        self.start_sweep_btn.config(state="disabled")
 
         # Stop button for continuous sweep (disabled until a continuous sweep is started)
         self.stop_sweep_btn = Button(
@@ -71,6 +75,8 @@ class MainWindow(Frame):
 
         # Internal state tracking for continuous sweep
         self._continuous_active = False
+        # Track currently loaded preset base name for export working title
+        self._current_preset_name = None
 
         # Snapshot (read-back) button
         btn_snapshot = Button(self.left_frame, text="Snapshot Settings", command=self.snapshot_upv, width=btn_width)
@@ -82,6 +88,9 @@ class MainWindow(Frame):
 
         self.status_label = Label(self.left_frame, text="", fg="green")
         self.status_label.pack(pady=10)
+        # Display currently loaded preset (if any)
+        self.preset_label = Label(self.left_frame, text="Preset: (none)", fg="#555555")
+        self.preset_label.pack(pady=(0,8))
 
         # 2x2 grid container for four independently scrollable panels
         self.grid_frame = Frame(self.master)
@@ -109,6 +118,20 @@ class MainWindow(Frame):
         self.entries = {}
         self.load_settings()
         self.upv = None
+        # Ensure initial state
+        self._refresh_start_sweep_state()
+
+    def _refresh_start_sweep_state(self):
+        """Enable Start Sweep only when settings applied AND UPV connected."""
+        try:
+            if not hasattr(self, 'start_sweep_btn'):
+                return
+            if getattr(self, '_settings_applied', False) and self.upv is not None:
+                self.start_sweep_btn.config(state="normal")
+            else:
+                self.start_sweep_btn.config(state="disabled")
+        except Exception:
+            pass
 
     def _create_combo(self, parent, values, current_display, *, width=20, grid_kwargs=None, entry_key=None, store_attr=None):
         """Utility to build a readonly ttk.Combobox with unified wheel binding.
@@ -140,10 +163,115 @@ class MainWindow(Frame):
         for widget in self.grid_frame.winfo_children():
             widget.destroy()
         self.entries.clear()
+        # Reset analyzer hidden rows registry early so captures during rebuild are guaranteed
+        self._an_func_hidden_rows = {}
 
         try:
             with open(SETTINGS_FILE, "r") as f:
                 settings = json.load(f)
+
+            # --- Normalization: convert legacy/snapshot unit variants to canonical display ---
+            # Handles: PCT -> %, DBV/DBU/DBM case, HZ/KHZ casing, OHM/KOHM/Ω, time units, micro volts (uV/UV -> μV)
+            import re
+            def _normalize_value(val: str) -> str:
+                original = val
+                s = val.strip()
+                if not s:
+                    return s
+                # Only attempt heavy normalization if there's at least one digit (avoid enumerations like AUTO, OFF)
+                if not any(ch.isdigit() for ch in s):
+                    # Still convert pure unit tokens like 'OHM'
+                    pass
+                # Collapse multiple spaces
+                s = re.sub(r"\s+", " ", s)
+                # Guard: skip normalization for pure code tokens (pattern Letter + digits + optional letters, no spaces)
+                # Examples: S256K, R200K, S1K, LINP, LOGS
+                if ' ' not in s and re.fullmatch(r"[A-Za-z]{1,6}\d{1,5}[A-Za-z]{0,4}", s):
+                    return original  # leave as-is
+                # Percent: replace trailing/standalone PCT with %
+                s = re.sub(r"(?i)\bPCT\b", "%", s)
+                # Ensure a space before % if number immediately followed by % without space
+                s = re.sub(r"(\d)(%)", r"\1 \2", s)
+                # dBV / dBu / dBm casing (avoid changing already correct)
+                s = re.sub(r"(?i)\bDBV\b", "dBV", s)
+                s = re.sub(r"(?i)\bDBU\b", "dBu", s)
+                s = re.sub(r"(?i)\bDBM\b", "dBm", s)
+                # Frequency units
+                s = re.sub(r"(?i)\bHZ\b", "Hz", s)
+                s = re.sub(r"(?i)\bKHZ\b", "kHz", s)
+                # Time units (S, MS, US, MIN)
+                # Convert US/us to μs for display, keep ms/s/min lowercase
+                s = re.sub(r"(?i)(\d)\s*US\b", r"\1 μs", s)
+                s = re.sub(r"(?i)\bMS\b", "ms", s)
+                s = re.sub(r"(?i)\bS\b", "s", s)
+                s = re.sub(r"(?i)\bMIN\b", "min", s)
+                # Voltage micro symbol: uV/UV -> μV (display convention)
+                s = re.sub(r"(?i)\buV\b", "μV", s)
+                # Impedance: OHM/Ω -> ohm; KOHM/KΩ -> kohm
+                s = re.sub(r"(?i)\bKOHM\b", "kohm", s)
+                s = re.sub(r"(?i)\bKΩ\b", "kohm", s)
+                s = re.sub(r"(?i)\bOHM\b", "ohm", s)
+                # Replace standalone Ω with ohm
+                s = re.sub(r"Ω", "ohm", s)
+                # Normalize kohm casing
+                s = re.sub(r"(?i)\bkohm\b", "kohm", s)
+                # Ensure single space between numeric and unit if they are concatenated (e.g., 100Hz -> 100 Hz)
+                # Avoid splitting embedded code tokens like S256K (preceded by a letter before the digits)
+                s = re.sub(r"(?<![A-Za-z])(\d+)([a-zA-Zμ])", r"\1 \2", s)
+                # Repair accidental earlier snapshot mutations that may have split code tokens (R200 K -> R200K)
+                s = re.sub(r"\b([A-Za-z])(\d{1,5})\s+([A-Za-z]{1,3})\b",
+                            lambda m: (m.group(1)+m.group(2)+m.group(3))
+                                      if re.fullmatch(r"[A-Za-z]{1,6}\d{1,5}[A-Za-z]{0,4}", m.group(1)+m.group(2)+m.group(3))
+                                      else m.group(0),
+                            s)
+                # Trim again
+                s = s.strip()
+                return s if s != original else original
+
+            try:
+                normalization_changes = []  # collect (section, key, old, new)
+                for section_name in ("Analyzer Function", "Generator Function", "Analyzer Config", "Generator Config"):
+                    section_dict = settings.get(section_name)
+                    if not isinstance(section_dict, dict):
+                        continue
+                    for key, val in list(section_dict.items()):
+                        if isinstance(val, str):
+                            norm = _normalize_value(val)
+                            if norm != val:
+                                section_dict[key] = norm
+                                normalization_changes.append((section_name, key, val, norm))
+                # Persist back to settings.json if any normalization changes occurred
+                if normalization_changes:
+                    try:
+                        with open(SETTINGS_FILE, 'w', encoding='utf-8') as wf:
+                            json.dump(settings, wf, indent=2, ensure_ascii=False)
+                    except Exception:
+                        pass
+                    # Expose count for diagnostics (optional)
+                    self._last_normalization_change_count = len(normalization_changes)
+            except Exception:
+                pass
+
+            # Ensure 'Frequency' exists in 'Generator Function' so it can be shown when Sweep Ctrl is Off
+            try:
+                if isinstance(settings, dict) and "Generator Function" in settings:
+                    gf = settings["Generator Function"]
+                    if isinstance(gf, dict) and "Frequency" not in gf:
+                        # Insert Frequency after 'Sweep Ctrl' if present, else at beginning
+                        default_freq = "1000 Hz"
+                        new_gf = {}
+                        inserted = False
+                        for k, v in gf.items():
+                            new_gf[k] = v
+                            if k == "Sweep Ctrl":
+                                new_gf["Frequency"] = default_freq
+                                inserted = True
+                        if not inserted:
+                            # Prepend Frequency
+                            new_gf = {"Frequency": default_freq, **new_gf}
+                        settings["Generator Function"] = new_gf
+            except Exception:
+                pass
 
             sections = [
                 ("Generator Config", 0, 0),
@@ -239,7 +367,17 @@ class MainWindow(Frame):
                     for i, (label, value) in enumerate(settings[section].items(), start=0):
                         # Remove extra top gap specifically for first row in Generator Config (use int 0 not tuple)
                         row_pady = 0 if (section == "Generator Config" and i == 0) else 2
-                        Label(frame, text=label, anchor="w", width=22, bg=frame["background"]).grid(row=i, column=0, sticky="w", padx=(0,8), pady=row_pady)
+                        # Dynamic sweep control visibility support for Generator Function section
+                        if section == "Generator Function" and i == 0:
+                            # Initialize storage for row widgets (label + control) we may hide/show
+                            self._gen_func_widgets = {}
+                            self._gen_func_dynamic_labels = {"Frequency", "Next Step", "X Axis", "Z Axis", "Spacing", "Start", "Stop", "Points", "Halt"}
+                        # Friendly display names while keeping underlying JSON keys
+                        shown_label = DISPLAY_LABEL_OVERRIDES.get(label, label)
+                        label_widget = Label(frame, text=shown_label, anchor="w", width=22, bg=frame["background"])
+                        label_widget.grid(row=i, column=0, sticky="w", padx=(0,8), pady=row_pady)
+                        if section == "Generator Function" and label in getattr(self, '_gen_func_dynamic_labels', set()):
+                            self._gen_func_widgets.setdefault(label, []).append(label_widget)
                         if section == "Generator Config" and label == "Instrument Generator":
                             display_values = list(INSTRUMENT_GENERATOR_OPTIONS.values())
                             current_display = INSTRUMENT_GENERATOR_OPTIONS.get(value, value)
@@ -295,14 +433,25 @@ class MainWindow(Frame):
                                 rb.pack(side="left", padx=5)
                             self.entries[("Generator Config", label)] = self.volt_range_var
                         elif section == "Generator Config" and label == "Max Voltage":
-                            # Split value and unit if possible
+                            # Split value and unit if possible (case-insensitive, normalize dB units)
                             import re
                             unit_options = ["V", "mV", "μV", "dBV", "dBu", "dBm"]
                             val_str = str(value)
                             match = re.match(r"^([\-\d\.]+)\s*([a-zA-Zμ]+)?$", val_str)
                             if match:
                                 val_part = match.group(1)
-                                unit_part = match.group(2) if match.group(2) in unit_options else unit_options[0]
+                                raw_unit = match.group(2)
+                                if raw_unit:
+                                    # normalize by case-insensitive match against unit_options
+                                    unit_part = None
+                                    for opt in unit_options:
+                                        if raw_unit.lower() == opt.lower():
+                                            unit_part = opt
+                                            break
+                                    if unit_part is None:
+                                        unit_part = unit_options[0]
+                                else:
+                                    unit_part = unit_options[0]
                             else:
                                 val_part = val_str
                                 unit_part = unit_options[0]
@@ -362,14 +511,24 @@ class MainWindow(Frame):
                             self.bind_combobox_mousewheel(combo)
                             self.entries[(section, label)] = (entry, combo)
                         elif section == "Generator Config" and label == "Ref Voltage":
-                            # Same as Max Voltage: value + unit
+                            # Same as Max Voltage: value + unit (case-insensitive)
                             import re
                             unit_options = ["V", "mV", "μV", "dBV", "dBu", "dBm"]
                             val_str = str(value)
                             match = re.match(r"^([\-\d\.]+)\s*([a-zA-Zμ]+)?$", val_str)
                             if match:
                                 val_part = match.group(1)
-                                unit_part = match.group(2) if match.group(2) in unit_options else unit_options[0]
+                                raw_unit = match.group(2)
+                                if raw_unit:
+                                    unit_part = None
+                                    for opt in unit_options:
+                                        if raw_unit.lower() == opt.lower():
+                                            unit_part = opt
+                                            break
+                                    if unit_part is None:
+                                        unit_part = unit_options[0]
+                                else:
+                                    unit_part = unit_options[0]
                             else:
                                 val_part = val_str
                                 unit_part = unit_options[0]
@@ -490,6 +649,58 @@ class MainWindow(Frame):
                             self._create_combo(frame, display_values, current_display,
                                                grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
                                                entry_key=(section, label))
+                            # We'll bind visibility update after building all rows
+                        elif section == "Generator Function" and label == "Frequency":
+                            # Value + unit (Hz / kHz)
+                            import re
+                            unit_options = ["Hz", "kHz"]
+                            val_str = str(value)
+                            match = re.match(r"^([\-\d\.]+)\s*([a-zA-Z]+)?$", val_str)
+                            if match:
+                                val_part = match.group(1)
+                                unit_part = match.group(2)
+                                # Normalize provided unit to expected capitalization
+                                if unit_part:
+                                    unit_part_norm = unit_part.lower()
+                                    if unit_part_norm in ("hz",):
+                                        unit_part = "Hz"
+                                    elif unit_part_norm in ("khz",):
+                                        unit_part = "kHz"
+                                if unit_part not in unit_options:
+                                    unit_part = unit_options[0]
+                            else:
+                                val_part = val_str
+                                unit_part = unit_options[0]
+                            freq_frame = Frame(frame)
+                            freq_frame.grid(row=i, column=1, sticky="w", pady=2)
+                            entry = Entry(freq_frame, width=22)
+                            entry.insert(0, val_part)
+                            entry.pack(side="left", padx=(0, 8))
+                            combo = ttk.Combobox(freq_frame, values=unit_options, width=6, state="readonly")
+                            combo.set(unit_part)
+                            combo.pack(side="left")
+                            def convert_freq_unit(event=None, entry=entry, combo=combo):
+                                try:
+                                    val = float(entry.get())
+                                except Exception:
+                                    return
+                                old_unit = getattr(combo, '_last_unit', unit_part)
+                                new_unit = combo.get()
+                                scale = {"Hz": 1, "kHz": 1e3}
+                                if old_unit in scale and new_unit in scale:
+                                    val_si = val * scale[old_unit]
+                                    new_val = val_si / scale[new_unit]
+                                    entry.delete(0, 'end')
+                                    entry.insert(0, str(int(new_val) if new_val.is_integer() else round(new_val, 6)))
+                                combo._last_unit = new_unit
+                            combo._last_unit = unit_part
+                            combo.bind('<<ComboboxSelected>>', convert_freq_unit)
+                            combo.unbind("<MouseWheel>")
+                            self.bind_combobox_mousewheel(combo)
+                            self.entries[(section, label)] = (entry, combo)
+                            # Track for dynamic visibility
+                            if section == "Generator Function":
+                                self._gen_func_widgets.setdefault(label, []).append(freq_frame)
                         elif section == "Generator Function" and label == "Next Step":
                             from gui.display_map import NEXT_STEP_OPTIONS
                             display_values = list(NEXT_STEP_OPTIONS.values())
@@ -497,6 +708,8 @@ class MainWindow(Frame):
                             self._create_combo(frame, display_values, current_display,
                                                grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
                                                entry_key=(section, label))
+                            if section == "Generator Function":
+                                self._gen_func_widgets.setdefault(label, []).append(self.entries[(section, label)])
                         elif section == "Generator Function" and label == "X Axis":
                             from gui.display_map import X_AXIS_OPTIONS
                             display_values = list(X_AXIS_OPTIONS.values())
@@ -504,6 +717,8 @@ class MainWindow(Frame):
                             self._create_combo(frame, display_values, current_display,
                                                grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
                                                entry_key=(section, label))
+                            if section == "Generator Function":
+                                self._gen_func_widgets.setdefault(label, []).append(self.entries[(section, label)])
                         elif section == "Generator Function" and label == "Z Axis":
                             from gui.display_map import Z_AXIS_OPTIONS
                             display_values = list(Z_AXIS_OPTIONS.values())
@@ -511,6 +726,8 @@ class MainWindow(Frame):
                             self._create_combo(frame, display_values, current_display,
                                                grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
                                                entry_key=(section, label))
+                            if section == "Generator Function":
+                                self._gen_func_widgets.setdefault(label, []).append(self.entries[(section, label)])
                         elif section == "Generator Function" and label == "Spacing":
                             from gui.display_map import SPACING_OPTIONS
                             display_values = list(SPACING_OPTIONS.values())
@@ -518,6 +735,8 @@ class MainWindow(Frame):
                             self._create_combo(frame, display_values, current_display,
                                                grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
                                                entry_key=(section, label))
+                            if section == "Generator Function":
+                                self._gen_func_widgets.setdefault(label, []).append(self.entries[(section, label)])
                         elif section == "Generator Function" and label in ("Start", "Stop"):
                             import re
                             unit_options = ["Hz", "kHz"]
@@ -556,15 +775,27 @@ class MainWindow(Frame):
                             combo.unbind("<MouseWheel>")
                             self.bind_combobox_mousewheel(combo)
                             self.entries[(section, label)] = (entry, combo)
+                            if section == "Generator Function":
+                                self._gen_func_widgets.setdefault(label, []).append(hv_frame)
                         elif section == "Generator Function" and label == "Voltage":
-                            # Same as Max Voltage: value + unit
+                            # Same as Max Voltage: value + unit (case-insensitive, ensure DBR -> dBr)
                             import re
                             unit_options = ["V", "mV", "μV", "dBV", "dBu", "dBm", "dBr"]
                             val_str = str(value)
                             match = re.match(r"^([\-\d\.]+)\s*([a-zA-Zμ]+)?$", val_str)
                             if match:
                                 val_part = match.group(1)
-                                unit_part = match.group(2) if match.group(2) in unit_options else unit_options[0]
+                                raw_unit = match.group(2)
+                                if raw_unit:
+                                    unit_part = None
+                                    for opt in unit_options:
+                                        if raw_unit.lower() == opt.lower():
+                                            unit_part = opt
+                                            break
+                                    if unit_part is None:
+                                        unit_part = unit_options[0]
+                                else:
+                                    unit_part = unit_options[0]
                             else:
                                 val_part = val_str
                                 unit_part = unit_options[0]
@@ -684,6 +915,8 @@ class MainWindow(Frame):
                             combo.unbind("<MouseWheel>")
                             self.entries[(section, label)] = combo
                             self.bind_combobox_mousewheel(combo)
+                            if section == "Generator Function":
+                                self._gen_func_widgets.setdefault(label, []).append(combo)
                         elif section == "Generator Function" and label == "Equalizer":
                             import tkinter as tk
                             var = tk.StringVar()
@@ -738,6 +971,7 @@ class MainWindow(Frame):
                             self._create_combo(frame, display_values, current_display,
                                                grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
                                                entry_key=(section, label))
+                        
                         elif section == "Analyzer Config" and label == "Pre Filter":
                             from gui.display_map import PRE_FILTER_OPTIONS
                             display_values = list(PRE_FILTER_OPTIONS.values())
@@ -891,10 +1125,19 @@ class MainWindow(Frame):
                             from gui.display_map import FUNCTION_ANALYZER_OPTIONS
                             display_values = list(FUNCTION_ANALYZER_OPTIONS.values())
                             current_display = FUNCTION_ANALYZER_OPTIONS.get(value, value)
-                            self._create_combo(frame, display_values, current_display,
-                                               width=24,
-                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
-                                               entry_key=(section, label))
+                            combo = self._create_combo(frame, display_values, current_display,
+                                                       width=24,
+                                                       grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                                       entry_key=(section, label))
+                            # Bind for dynamic S/N Sequence visibility updates
+                            def _fa_changed(event=None, self=self):
+                                try:
+                                    self._update_analyzer_function_visibility()
+                                except Exception:
+                                    pass
+                            combo.bind('<<ComboboxSelected>>', _fa_changed, add='+')
+                            # Initialize storage for analyzer function rows we may hide dynamically
+                            self._an_func_hidden_rows = getattr(self, '_an_func_hidden_rows', {})
                         elif section == "Analyzer Function" and label == "S/N Sequence":
                             import tkinter as tk
                             var = tk.BooleanVar()
@@ -902,6 +1145,15 @@ class MainWindow(Frame):
                             chk = tk.Checkbutton(frame, variable=var)
                             chk.grid(row=i, column=1, sticky="w", pady=2)
                             self.entries[(section, label)] = var
+                            # Capture row widgets so we can hide/show dynamically
+                            try:
+                                row_widgets = frame.grid_slaves(row=i)
+                                # Store tuples of (widget, grid_info)
+                                self._sn_sequence_widgets = [(w, w.grid_info()) for w in row_widgets]
+                                self._sn_sequence_row = i
+                                self._an_func_frame = frame
+                            except Exception:
+                                pass
                         elif section == "Analyzer Function" and label == "Meas Time":
                             from gui.display_map import MEAS_TIME_OPTIONS
                             display_values = list(MEAS_TIME_OPTIONS.values())
@@ -909,6 +1161,26 @@ class MainWindow(Frame):
                             self._create_combo(frame, display_values, current_display,
                                                grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
                                                entry_key=(section, label))
+                        elif section == "Analyzer Function" and label == "Freq Mode":
+                            from gui.display_map import FREQ_MODE_OPTIONS
+                            display_values = list(FREQ_MODE_OPTIONS.values())
+                            current_display = FREQ_MODE_OPTIONS.get(value, value)
+                            combo = self._create_combo(frame, display_values, current_display,
+                                                       grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                                       entry_key=(section, label))
+                            # Bind to update Factor visibility when Freq Mode changes
+                            def _freq_mode_changed(event=None, self=self):
+                                try:
+                                    self._update_analyzer_function_visibility()
+                                except Exception:
+                                    pass
+                            combo.bind('<<ComboboxSelected>>', _freq_mode_changed, add='+')
+                            # Capture widgets for dynamic hide when Function Analyzer == RMS
+                            try:
+                                row_widgets = frame.grid_slaves(row=i)
+                                self._an_func_hidden_rows.setdefault('Freq Mode', [(w, w.grid_info()) for w in row_widgets])
+                            except Exception:
+                                pass
                         elif section == "Analyzer Function" and label == "Notch(Gain)":
                             from gui.display_map import NOTCH_OPTIONS
                             display_values = list(NOTCH_OPTIONS.values())
@@ -923,6 +1195,12 @@ class MainWindow(Frame):
                             self._create_combo(frame, display_values, current_display,
                                                grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
                                                entry_key=(section, label))
+                            # Capture for potential RMS Selective hide
+                            try:
+                                row_widgets = frame.grid_slaves(row=i)
+                                self._an_func_hidden_rows.setdefault('Filter1', [(w, w.grid_info()) for w in row_widgets])
+                            except Exception:
+                                pass
                         elif section == "Analyzer Function" and label == "Filter2":
                             from gui.display_map import FILTER2_OPTIONS
                             display_values = list(FILTER2_OPTIONS.values())
@@ -937,6 +1215,12 @@ class MainWindow(Frame):
                             self._create_combo(frame, display_values, current_display,
                                                grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
                                                entry_key=(section, label))
+                            # Capture for potential RMS Selective hide
+                            try:
+                                row_widgets = frame.grid_slaves(row=i)
+                                self._an_func_hidden_rows.setdefault('Filter3', [(w, w.grid_info()) for w in row_widgets])
+                            except Exception:
+                                pass
                         elif section == "Analyzer Function" and label == "Fnct Settling":
                             from gui.display_map import FNCT_SETTLING_OPTIONS
                             display_values = list(FNCT_SETTLING_OPTIONS.values())
@@ -944,6 +1228,18 @@ class MainWindow(Frame):
                             self._create_combo(frame, display_values, current_display,
                                                grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
                                                entry_key=(section, label))
+                        elif section == "Analyzer Function" and label == "Samples":
+                            # Create an entry for Samples (was missing previously causing empty cell)
+                            try:
+                                entry = Entry(frame, width=22)
+                                entry.insert(0, str(value))
+                                entry.grid(row=i, column=1, sticky="w", pady=2)
+                                self.entries[(section, label)] = entry
+                                # Capture row widgets (label + entry) for dynamic RMS-only visibility
+                                row_widgets = frame.grid_slaves(row=i)
+                                self._an_func_hidden_rows.setdefault('Samples', [(w, w.grid_info()) for w in row_widgets])
+                            except Exception:
+                                pass
                         elif section == "Analyzer Function" and label == "Tolerance":
                             import tkinter as tk
                             import re
@@ -995,6 +1291,34 @@ class MainWindow(Frame):
                             combo.unbind("<MouseWheel>")
                             self.bind_combobox_mousewheel(combo)
                             self.entries[(section, label)] = (entry, combo)
+                        elif section == "Analyzer Function" and label == "Factor":
+                            # Simple numeric factor with a trailing '*' unit indicator
+                            import tkinter as tk
+                            import re
+                            fac_frame = Frame(frame)
+                            fac_frame.grid(row=i, column=1, sticky="w", pady=2)
+                            entry = Entry(fac_frame, width=22)
+                            raw_val = str(value).strip()
+                            # Extract leading numeric (float or int, optional scientific), ignore trailing tokens like 'MLT'
+                            num_match = re.match(r"^[\s]*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)", raw_val)
+                            cleaned = num_match.group(1) if num_match else raw_val
+                            entry.insert(0, cleaned)
+                            # Optionally normalize settings in-memory so future saves drop 'MLT'
+                            try:
+                                if settings.get(section, {}).get(label) != cleaned:
+                                    settings[section][label] = cleaned
+                            except Exception:
+                                pass
+                            entry.pack(side="left", padx=(0, 4))
+                            unit_lbl = Label(fac_frame, text="*", bg=frame["background"], fg="#333")
+                            unit_lbl.pack(side="left")
+                            self.entries[(section, label)] = entry
+                            # Capture for dynamic hide (same rule set as Bandwidth / Sweep Ctrl / Freq Mode)
+                            try:
+                                row_widgets = frame.grid_slaves(row=i)
+                                self._an_func_hidden_rows.setdefault('Factor', [(w, w.grid_info()) for w in row_widgets])
+                            except Exception:
+                                pass
                         elif section == "Analyzer Function" and label == "Resolution":
                             import tkinter as tk
                             import re
@@ -1187,6 +1511,34 @@ class MainWindow(Frame):
                             self._create_combo(frame, display_values, current_display,
                                                grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
                                                entry_key=(section, label))
+                        elif section == "Analyzer Function" and label == "Bandwidth Analyzer Config":
+                            # New combobox for detailed bandwidth pass/stop configuration
+                            from gui.display_map import BANDWIDTH_ANALYZER_CONFIG_OPTIONS
+                            display_values = list(BANDWIDTH_ANALYZER_CONFIG_OPTIONS.values())
+                            current_display = BANDWIDTH_ANALYZER_CONFIG_OPTIONS.get(value, value)
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                               entry_key=(section, label))
+                            # Capture row widgets for dynamic hide when Function Analyzer == RMS
+                            try:
+                                row_widgets = frame.grid_slaves(row=i)
+                                self._an_func_hidden_rows.setdefault('Bandwidth Analyzer Config', [(w, w.grid_info()) for w in row_widgets])
+                            except Exception:
+                                pass
+                        elif section == "Analyzer Function" and label == "Sweep Ctrl Analyzer Config":
+                            # Analyzer sweep control (same display set as generator sweep control)
+                            from gui.display_map import SWEEP_CTRL_OPTIONS
+                            display_values = list(SWEEP_CTRL_OPTIONS.values())
+                            current_display = SWEEP_CTRL_OPTIONS.get(value, value)
+                            self._create_combo(frame, display_values, current_display,
+                                               grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
+                                               entry_key=(section, label))
+                            # Capture row widgets for dynamic hide when Function Analyzer == RMS
+                            try:
+                                row_widgets = frame.grid_slaves(row=i)
+                                self._an_func_hidden_rows.setdefault('Sweep Ctrl Analyzer Config', [(w, w.grid_info()) for w in row_widgets])
+                            except Exception:
+                                pass
                         elif section == "Analyzer Function" and label == "Waveform":
                             import tkinter as tk
                             var = tk.BooleanVar()
@@ -1199,6 +1551,9 @@ class MainWindow(Frame):
                             entry.insert(0, str(value))
                             entry.grid(row=i, column=1, sticky="w", pady=2)
                             self.entries[(section, label)] = entry
+                            # Ensure generic dynamic labels (e.g., Points) register their control
+                            if section == "Generator Function" and label in getattr(self, '_gen_func_dynamic_labels', set()):
+                                self._gen_func_widgets.setdefault(label, []).append(entry)
 
                     # --- Impedance widget logic ---
                     def set_impedance_widget(output_type_display, selected_code=None):
@@ -1236,6 +1591,18 @@ class MainWindow(Frame):
                             set_impedance_widget(selected_display)
                         self.output_type_combo.bind("<<ComboboxSelected>>", on_output_type_change)
 
+            # After building all sections, bind sweep control visibility if present
+            # (Do this inside outer loop but after each section processed; harmless to re-run if not generator function)
+            if ("Generator Function", "Sweep Ctrl") in self.entries and hasattr(self, '_gen_func_widgets'):
+                try:
+                    sc_widget = self.entries[("Generator Function", "Sweep Ctrl")]
+                    # Ensure single binding
+                    sc_widget.bind("<<ComboboxSelected>>", lambda e: self._update_sweep_ctrl_visibility())
+                    # Apply initial visibility
+                    self._update_sweep_ctrl_visibility()
+                except Exception:
+                    pass
+
             # Store frames so we can access canvases later
             self._panel_frames = frames
             # Force one immediate recalculation (helps on Windows where first draw is blank)
@@ -1247,9 +1614,21 @@ class MainWindow(Frame):
                         pass
             # Defer a second pass after geometry is fully settled
             self.after(80, self._reset_all_panel_views)
+            # Ensure analyzer function dependent visibility matches initial Function Analyzer selection
+            try:
+                # Immediate attempt (handles RMSS presets so Filter1/Filter3 hide right away)
+                self._update_analyzer_function_visibility()
+                # Follow-up after a short delay in case some rows weren't realized yet
+                self.after(120, self._update_analyzer_function_visibility)
+            except Exception:
+                pass
 
         except Exception as e:
             messagebox.showerror("Settings Error", f"Could not load settings.json: {e}")
+        # After (re)loading settings, force user to Apply before sweep
+        if hasattr(self, 'start_sweep_btn'):
+            self._settings_applied = False
+            self._refresh_start_sweep_state()
 
     def save_settings(self):
         try:
@@ -1307,6 +1686,12 @@ class MainWindow(Frame):
 
     def apply_settings(self):
         try:
+            # If a continuous sweep is active, stop it silently before applying new settings
+            if getattr(self, '_continuous_active', False):
+                try:
+                    self.stop_continuous_sweep(silent=True)
+                except Exception:
+                    pass
             with open(SETTINGS_FILE, "r") as f:
                 settings = json.load(f)
 
@@ -1348,6 +1733,9 @@ class MainWindow(Frame):
                         unit_ascii = "uV"
                     else:
                         unit_ascii = unit
+                    # Normalize DBR variants if ever present (shouldn't appear here but keep consistent)
+                    if unit_ascii.lower() == 'dbr':
+                        unit_ascii = 'dBr'
                     settings[section][label] = f"{val} {unit_ascii}" if val else ""
                 elif section == "Generator Config" and label == "Ref Voltage":
                     entry, combo = widget
@@ -1357,6 +1745,8 @@ class MainWindow(Frame):
                         unit_ascii = "uV"
                     else:
                         unit_ascii = unit
+                    if unit_ascii.lower() == 'dbr':
+                        unit_ascii = 'dBr'
                     settings[section][label] = f"{val} {unit_ascii}" if val else ""
                 elif section == "Generator Config" and label == "Ref Frequency":
                     entry, combo = widget
@@ -1401,6 +1791,11 @@ class MainWindow(Frame):
                     display_value = widget.get()
                     code_value = reverse_map.get(display_value, display_value)
                     settings[section][label] = code_value
+                elif section == "Generator Function" and label == "Frequency":
+                    entry, combo = widget
+                    val = entry.get().strip()
+                    unit = combo.get().strip()
+                    settings[section][label] = f"{val} {unit}" if val else ""
                 elif section == "Generator Function" and label in ("Start", "Stop"):
                     entry, combo = widget
                     val = entry.get().strip()
@@ -1414,6 +1809,9 @@ class MainWindow(Frame):
                         unit_ascii = "uV"
                     else:
                         unit_ascii = unit
+                    # Normalize DBR variants to canonical dBr
+                    if unit_ascii.lower() == 'dbr':
+                        unit_ascii = 'dBr'
                     settings[section][label] = f"{val} {unit_ascii}" if val else ""
                 elif section == "Generator Function" and label == "Filter":
                     combo, filter_keys, filter_values = widget
@@ -1524,6 +1922,12 @@ class MainWindow(Frame):
                     display_value = widget.get()
                     code_value = reverse_map.get(display_value, display_value)
                     settings[section][label] = code_value
+                elif section == "Analyzer Function" and label == "Freq Mode":
+                    from gui.display_map import FREQ_MODE_OPTIONS
+                    reverse_map = {v: k for k, v in FREQ_MODE_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_map.get(display_value, display_value)
+                    settings[section][label] = code_value
                 elif section == "Analyzer Function" and label == "Notch(Gain)":
                     from gui.display_map import NOTCH_OPTIONS
                     reverse_map = {v: k for k, v in NOTCH_OPTIONS.items()}
@@ -1558,6 +1962,16 @@ class MainWindow(Frame):
                     val = entry.get().strip()
                     unit = combo.get().strip()
                     settings[section][label] = f"{val} {unit}" if val else ""
+
+                elif section == "Analyzer Function" and label == "Factor":
+                    # Simple numeric field, store raw string (trimmed)
+                    import re
+                    val = widget.get().strip()
+                    # Extract numeric portion only
+                    num_match = re.match(r"^[\s]*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)", val)
+                    if num_match:
+                        val = num_match.group(1)
+                    settings[section][label] = val
                 elif section == "Analyzer Function" and label == "Resolution":
                     entry, combo = widget
                     val = entry.get().strip()
@@ -1611,6 +2025,19 @@ class MainWindow(Frame):
                 elif section == "Analyzer Function" and label == "Waveform":
                     var = widget
                     settings[section][label] = "ON" if var.get() else "OFF"
+                elif section == "Analyzer Function" and label == "Sweep Ctrl Analyzer Config":
+                    from gui.display_map import SWEEP_CTRL_OPTIONS
+                    reverse_map = {v: k for k, v in SWEEP_CTRL_OPTIONS.items()}
+                    display_value = widget.get()
+                    code_value = reverse_map.get(display_value, display_value)
+                    settings[section][label] = code_value
+                elif section == "Analyzer Function" and label == "Bandwidth Analyzer Config":
+                            # New detailed bandwidth pass/stop configuration reverse mapping
+                            from gui.display_map import BANDWIDTH_ANALYZER_CONFIG_OPTIONS
+                            reverse_map = {v: k for k, v in BANDWIDTH_ANALYZER_CONFIG_OPTIONS.items()}
+                            display_value = widget.get()
+                            code_value = reverse_map.get(display_value, display_value)
+                            settings[section][label] = code_value
                 else:
                     settings[section][label] = widget.get()
 
@@ -1645,17 +2072,29 @@ class MainWindow(Frame):
             self.status_label.config(text="Settings applied and saved successfully.")
         else:
             messagebox.showwarning("Warning", "Not connected to UPV.")
+        # Mark settings as applied regardless of connection so user can attempt sweep after connecting
+        self._settings_applied = True
+        self._refresh_start_sweep_state()
 
     def fetch_data(self):
         if self.upv:
             export_path = filedialog.asksaveasfilename(defaultextension=".hxml",
                                                        filetypes=[("HXML files", "*.hxml"), ("All files", "*.*")])
             if export_path:
-                fetch_and_plot_trace(self.upv, export_path)
+                # Use preset name for working title if one has been loaded; fallback handled in fetch_and_plot_trace
+                try:
+                    fetch_and_plot_trace(self.upv, export_path, working_title=self._current_preset_name)
+                except TypeError:
+                    # Backwards compatibility if older function signature present
+                    fetch_and_plot_trace(self.upv, export_path)
         else:
             messagebox.showwarning("Warning", "Not connected to UPV.")
 
     def start_sweep(self):
+        # Enforce that settings were applied first
+        if not getattr(self, '_settings_applied', False):
+            messagebox.showinfo("Apply Required", "Please press 'Apply Settings' before starting a sweep.")
+            return
         if self.upv is None:
             messagebox.showerror("Sweep Error", "UPV is not connected.")
             return
@@ -1699,7 +2138,19 @@ class MainWindow(Frame):
                 if hasattr(self, 'stop_sweep_btn'):
                     self.stop_sweep_btn.config(state="disabled")
                 if hasattr(self, 'start_sweep_btn'):
-                    self.start_sweep_btn.config(state="normal")
+                    # Disable start until user explicitly re-applies settings
+                    try:
+                        self._settings_applied = False
+                        self.start_sweep_btn.config(state="disabled")
+                        # Inform user they must re-apply settings for next sweep
+                        self.update_status("Sweep completed. Apply Settings again to enable start.", color="green")
+                    except Exception:
+                        pass
+                    # Refresh gating logic (in case connection state changes later)
+                    try:
+                        self._refresh_start_sweep_state()
+                    except Exception:
+                        pass
         except Exception as e:
             status_callback(f"❌ Failed to start sweep: {e}")
             messagebox.showerror("Sweep Error", f"Failed to start sweep: {e}")
@@ -1710,13 +2161,18 @@ class MainWindow(Frame):
             if hasattr(self, 'start_sweep_btn'):
                 self.start_sweep_btn.config(state="normal")
 
-    def stop_continuous_sweep(self):
-        """Stop an active continuous sweep and fetch current data."""
+    def stop_continuous_sweep(self, silent: bool = False):
+        """Stop an active continuous sweep and (optionally) fetch current data.
+
+        Parameters:
+            silent (bool): When True, suppress dialogs and data fetch. Used when stopping
+                           implicitly (e.g., before applying settings)."""
         if self.upv is None:
             messagebox.showerror("Sweep Error", "UPV is not connected.")
             return
         if not self._continuous_active:
-            messagebox.showinfo("Sweep", "No continuous sweep is currently running.")
+            if not silent:
+                messagebox.showinfo("Sweep", "No continuous sweep is currently running.")
             return
         try:
             self.update_status("⏹ Stopping continuous sweep...")
@@ -1741,17 +2197,22 @@ class MainWindow(Frame):
             if hasattr(self, 'stop_sweep_btn'):
                 self.stop_sweep_btn.config(state="disabled")
             if hasattr(self, 'start_sweep_btn'):
-                self.start_sweep_btn.config(state="normal")
+                # Respect gating (may remain disabled if settings not applied or not connected)
+                try:
+                    # Mark settings as needing re-apply after a run stop
+                    self._settings_applied = False
+                    self.start_sweep_btn.config(state="disabled")
+                except Exception:
+                    pass
+                self._refresh_start_sweep_state()
             self.update_status("✅ Continuous sweep stopped.")
-            # Offer immediate data fetch
-            try:
-                self.fetch_data()
-            except Exception:
+            if not silent:
+                # No automatic fetch or dialog per user request; simply end silently with status label update
                 pass
-            messagebox.showinfo("Sweep", "Continuous sweep stopped.")
         except Exception as e:
             self.update_status(f"❌ Failed to stop sweep: {e}", color="red")
-            messagebox.showerror("Sweep Error", f"Failed to stop continuous sweep: {e}")
+            if not silent:
+                messagebox.showerror("Sweep Error", f"Failed to stop continuous sweep: {e}")
 
     def snapshot_upv(self):
         """Capture current UPV settings and save them to a JSON snapshot file.
@@ -1764,6 +2225,7 @@ class MainWindow(Frame):
             return
         try:
             from upv.upv_readback import save_settings_snapshot
+            import json
             # Ask user where to save snapshot
             dest = filedialog.asksaveasfilename(
                 defaultextension=".json",
@@ -1774,9 +2236,28 @@ class MainWindow(Frame):
             if not dest:
                 self.update_status("Snapshot cancelled.", color="orange")
                 return
+
+            # Prompt user for sweep mode
+            mode_continuous = messagebox.askyesno(
+                "Sweep Mode",
+                "Save snapshot as continuous sweep?\nYes = Continuous (INIT:CONT ON)\nNo = Single (INIT:CONT OFF)"
+            )
+
             out_path = save_settings_snapshot(self.upv, Path(dest))
+            # Inject INIT:CONT selection into snapshot JSON
+            try:
+                with open(out_path, 'r', encoding='utf-8') as f:
+                    snap_data = json.load(f)
+                snap_data["INIT:CONT"] = "ON" if mode_continuous else "OFF"
+                with open(out_path, 'w', encoding='utf-8') as f:
+                    json.dump(snap_data, f, indent=2, ensure_ascii=False)
+            except Exception:
+                pass
             self.update_status(f"Snapshot saved: {out_path.name}")
-            messagebox.showinfo("Snapshot Saved", f"Settings snapshot saved to:\n{out_path}")
+            messagebox.showinfo(
+                "Snapshot Saved",
+                f"Settings snapshot saved to:\n{out_path}\nSweep Mode: {'Continuous' if mode_continuous else 'Single'}"
+            )
         except Exception as e:
             self.update_status("Snapshot failed", color="red")
             messagebox.showerror("Snapshot Error", f"Failed to create snapshot: {e}")
@@ -1867,6 +2348,320 @@ class MainWindow(Frame):
 
         combo.bind('<MouseWheel>', on_mousewheel, add='+')
 
+    def _update_sweep_ctrl_visibility(self):
+        """Show only Frequency when Sweep Ctrl == OFF; otherwise hide Frequency and show other sweep controls.
+
+        Sweep Ctrl combobox contains human-readable values; we map back to code via display_map if needed.
+        We rely on the stored widget registry self._gen_func_widgets built in load_settings.
+        """
+        try:
+            sc_widget = self.entries[("Generator Function", "Sweep Ctrl")]
+        except KeyError:
+            return
+
+        current_display = sc_widget.get().strip()
+        # Determine if OFF; fetch mapping
+        try:
+            from gui.display_map import SWEEP_CTRL_OPTIONS
+            reverse_map = {v: k for k, v in SWEEP_CTRL_OPTIONS.items()}
+            code = reverse_map.get(current_display, current_display)
+        except Exception:
+            code = current_display
+
+        # Determine OFF state robustly (previous bug: comparing upper() to mixed-case string always False)
+        is_off = str(code).strip().lower() == "off"
+        # Determine Auto List state (various possible display forms)
+        code_norm = str(code).strip().lower()
+        is_auto_list = code_norm in {"alis", "auto list", "auto_list", "autolist"}
+
+        # If registry missing OR any expected dynamic label missing, rebuild dynamically by scanning grid
+        expected_dynamic = ["Frequency", "Next Step", "X Axis", "Z Axis", "Spacing", "Start", "Stop", "Points", "Halt"]
+        if (not hasattr(self, '_gen_func_widgets') or
+            any(lbl not in getattr(self, '_gen_func_widgets', {}) for lbl in expected_dynamic)):
+            try:
+                inner_frame, _canvas = self._panel_frames.get("Generator Function", (None, None))
+                if inner_frame is not None:
+                    dynamic_labels = set(expected_dynamic)
+                    row_map = {}
+                    for child in inner_frame.winfo_children():
+                        try:
+                            info = child.grid_info()
+                        except Exception:
+                            continue
+                        if not info:
+                            continue
+                        r = info.get('row')
+                        c = info.get('column')
+                        if r is None or c is None:
+                            continue
+                        row_map.setdefault(r, {})[c] = child
+                    rebuilt = {}
+                    for r, cols in row_map.items():
+                        label_w = cols.get(0)
+                        control_w = cols.get(1)
+                        if label_w is not None:
+                            try:
+                                text = label_w.cget('text')
+                            except Exception:
+                                text = None
+                            if text in dynamic_labels:
+                                rebuilt.setdefault(text, []).append(label_w)
+                                if control_w is not None:
+                                    rebuilt[text].append(control_w)
+                    if rebuilt:
+                        self._gen_func_widgets = rebuilt
+            except Exception:
+                pass
+
+        # Frequency widgets: match loosely (case-insensitive, allow colon, partial 'freq')
+        other_norm_labels = {lbl.replace(':','').strip().lower() for lbl in expected_dynamic if lbl != 'Frequency'}
+        for label_text, widgets in getattr(self, '_gen_func_widgets', {}).items():
+            norm = label_text.replace(':', '').strip().lower()
+            is_frequency_label = norm.startswith('frequency') or 'freq' in norm
+            if is_frequency_label:
+                # Frequency only shown when Sweep Ctrl == OFF
+                show = is_off
+            elif norm in other_norm_labels:
+                # Base visibility for non-frequency dynamic labels is the inverse of OFF
+                if is_off:
+                    show = False
+                else:
+                    # Additional rule: when Auto List (ALIS) is chosen, hide Spacing/Start/Stop/Points
+                    hide_for_auto_list = {"spacing", "start", "stop", "points"}
+                    if is_auto_list and norm in hide_for_auto_list:
+                        show = False
+                    else:
+                        show = True
+            else:
+                # Not a managed dynamic label; leave as-is
+                continue
+            for w in widgets:
+                try:
+                    if show:
+                        if hasattr(w, 'grid'):
+                            w.grid()
+                    else:
+                        if hasattr(w, 'grid_remove'):
+                            w.grid_remove()
+                except Exception:
+                    continue
+
+    def _update_sn_sequence_visibility(self):
+        # Backwards compatibility: delegate to unified analyzer function visibility handler
+        self._update_analyzer_function_visibility()
+
+    def _update_analyzer_function_visibility(self):
+        """Unified visibility control for Analyzer Function dependent rows.
+
+        Rules:
+          - Hide 'S/N Sequence' when Function Analyzer == 'RMS Selective' (RMSS)
+          - Hide 'Bandwidth Analyzer Config', 'Sweep Ctrl Analyzer Config', and 'Freq Mode' when Function Analyzer == 'RMS'
+        """
+        try:
+            fa_widget = self.entries.get(("Analyzer Function", "Function Analyzer"))
+            if not fa_widget:
+                return
+            current_display = fa_widget.get().strip()
+            from gui.display_map import FUNCTION_ANALYZER_OPTIONS
+            reverse_map = {v: k for k, v in FUNCTION_ANALYZER_OPTIONS.items()}
+            code = reverse_map.get(current_display, current_display)
+
+            # S/N Sequence handling (hide if RMSS)
+            widgets = getattr(self, '_sn_sequence_widgets', None)
+            if widgets:
+                hide_sn = (code == 'RMSS')
+                any_visible = any(w.winfo_manager() == 'grid' for w, _ in widgets)
+                if hide_sn and any_visible:
+                    for w, _info in widgets:
+                        try:
+                            w.grid_remove()
+                        except Exception:
+                            pass
+                elif not hide_sn and not any_visible:
+                    for w, info in widgets:
+                        try:
+                            grid_kwargs = {k: v for k, v in info.items() if k in ('row','column','sticky','padx','pady','columnspan','rowspan')}
+                            w.grid(**grid_kwargs)
+                        except Exception:
+                            pass
+
+            # RMS hide set
+            hide_when_rms = ['Bandwidth Analyzer Config', 'Sweep Ctrl Analyzer Config', 'Freq Mode', 'Factor']
+            rows = getattr(self, '_an_func_hidden_rows', {})
+
+            # Ensure RMS-only labels (Tolerance, Resolution, Timeout) are captured if missing
+            try:
+                rms_only_capture_labels = ['Tolerance', 'Resolution', 'Timeout']
+                missing_capture = [lbl for lbl in rms_only_capture_labels if lbl not in rows]
+                if missing_capture:
+                    panel_tuple = self._panel_frames.get("Analyzer Function") if hasattr(self, '_panel_frames') else None
+                    if panel_tuple:
+                        inner_frame = panel_tuple[0]
+                        # Build row map of all widgets by grid row
+                        row_map = {}
+                        for child in inner_frame.winfo_children():
+                            try:
+                                gi = child.grid_info()
+                            except Exception:
+                                continue
+                            if not gi:
+                                continue
+                            r = gi.get('row')
+                            if r is None:
+                                continue
+                            row_map.setdefault(r, []).append(child)
+                        # Search for labels matching our targets
+                        for r, widgets_in_row in row_map.items():
+                            # Find any Label widget whose text (stripped, without colon) matches one of the missing labels
+                            label_texts = {}
+                            for w in widgets_in_row:
+                                try:
+                                    if isinstance(w, Label):
+                                        txt = w.cget('text')
+                                        if isinstance(txt, str):
+                                            norm = txt.replace(':', '').strip()
+                                            label_texts[norm] = True
+                                except Exception:
+                                    continue
+                            intersect = [lbl for lbl in missing_capture if lbl in label_texts]
+                            if not intersect:
+                                continue
+                            # Capture entire row for each matching label (usually one)
+                            for target in intersect:
+                                captured = []
+                                for w in widgets_in_row:
+                                    try:
+                                        gi = w.grid_info()
+                                        # Store minimal grid params we rely on elsewhere
+                                        grid_kwargs = {k: v for k, v in gi.items() if k in ('row','column','sticky','padx','pady','columnspan','rowspan')}
+                                        captured.append((w, grid_kwargs))
+                                    except Exception:
+                                        continue
+                                if captured:
+                                    rows[target] = captured
+                    # Reassign back to attribute (rows is a reference but ensure attr exists)
+                    self._an_func_hidden_rows = rows
+            except Exception:
+                pass
+            for label in hide_when_rms:
+                row_widgets = rows.get(label, [])
+                if not row_widgets:
+                    continue
+                hide_row = (code == 'RMS')
+                any_visible = any(w.winfo_manager() == 'grid' for w, _ in row_widgets)
+                if hide_row and any_visible:
+                    for w, _info in row_widgets:
+                        try:
+                            w.grid_remove()
+                        except Exception:
+                            pass
+                elif not hide_row and not any_visible:
+                    for w, info in row_widgets:
+                        try:
+                            grid_kwargs = {k: v for k, v in info.items() if k in ('row','column','sticky','padx','pady','columnspan','rowspan')}
+                            w.grid(**grid_kwargs)
+                        except Exception:
+                            pass
+
+            # RMSS-specific hide set (Filter1 and Filter3)
+            hide_when_rmss = ['Filter1', 'Filter3']
+            for label in hide_when_rmss:
+                row_widgets = rows.get(label, [])
+                if not row_widgets:
+                    continue
+                # Fallback: also treat display text containing 'RMS Selective' as RMSS in case mapping failed
+                hide_row = (code == 'RMSS') or (isinstance(current_display, str) and current_display.lower().startswith('rms') and 'select' in current_display.lower())
+                any_visible = any(w.winfo_manager() == 'grid' for w, _ in row_widgets)
+                if hide_row and any_visible:
+                    for w, _info in row_widgets:
+                        try:
+                            w.grid_remove()
+                        except Exception:
+                            pass
+                elif not hide_row and not any_visible:
+                    for w, info in row_widgets:
+                        try:
+                            grid_kwargs = {k: v for k, v in info.items() if k in ('row','column','sticky','padx','pady','columnspan','rowspan')}
+                            w.grid(**grid_kwargs)
+                        except Exception:
+                            pass
+
+            # Samples: show only when Function Analyzer == RMS
+            try:
+                samples_widgets = rows.get('Samples', [])
+                if samples_widgets:
+                    should_show_samples = (code == 'RMS')
+                    any_visible = any(w.winfo_manager() == 'grid' for w, _ in samples_widgets)
+                    if should_show_samples and not any_visible:
+                        for w, info in samples_widgets:
+                            try:
+                                grid_kwargs = {k: v for k, v in info.items() if k in ('row','column','sticky','padx','pady','columnspan','rowspan')}
+                                w.grid(**grid_kwargs)
+                            except Exception:
+                                pass
+                    elif not should_show_samples and any_visible:
+                        for w, _info in samples_widgets:
+                            try:
+                                w.grid_remove()
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+
+            # Additional dependency: Factor only visible when Freq Mode == GENT (Gen Track)
+            try:
+                freq_widget = self.entries.get(("Analyzer Function", "Freq Mode"))
+                if freq_widget:
+                    from gui.display_map import FREQ_MODE_OPTIONS
+                    rev_freq = {v: k for k, v in FREQ_MODE_OPTIONS.items()}
+                    freq_code = rev_freq.get(freq_widget.get().strip(), freq_widget.get().strip())
+                    factor_widgets = rows.get('Factor', [])
+                    if factor_widgets:
+                        should_show = (code != 'RMS') and (freq_code == 'GENT')  # hide under RMS anyway; show only if Gen Track
+                        any_visible = any(w.winfo_manager() == 'grid' for w, _ in factor_widgets)
+                        if should_show and not any_visible:
+                            for w, info in factor_widgets:
+                                try:
+                                    grid_kwargs = {k: v for k, v in info.items() if k in ('row','column','sticky','padx','pady','columnspan','rowspan')}
+                                    w.grid(**grid_kwargs)
+                                except Exception:
+                                    pass
+                        elif not should_show and any_visible:
+                            for w, _info in factor_widgets:
+                                try:
+                                    w.grid_remove()
+                                except Exception:
+                                    pass
+            except Exception:
+                pass
+
+            # Tolerance / Resolution / Timeout: only show when Function Analyzer == RMS
+            try:
+                rms_only = ['Tolerance', 'Resolution', 'Timeout']
+                for label in rms_only:
+                    row_widgets = rows.get(label, [])
+                    if not row_widgets:
+                        continue
+                    show = (code == 'RMS')
+                    any_visible = any(w.winfo_manager() == 'grid' for w, _ in row_widgets)
+                    if show and not any_visible:
+                        for w, info in row_widgets:
+                            try:
+                                grid_kwargs = {k: v for k, v in info.items() if k in ('row','column','sticky','padx','pady','columnspan','rowspan')}
+                                w.grid(**grid_kwargs)
+                            except Exception:
+                                pass
+                    elif not show and any_visible:
+                        for w, _info in row_widgets:
+                            try:
+                                w.grid_remove()
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+        except Exception:
+            pass
+
     def _reset_all_panel_views(self):
         """Ensure each panel canvas shows content at the top and has proper scrollregion.
 
@@ -1899,19 +2694,30 @@ class MainWindow(Frame):
         if not preset_path:
             return
 
+        mode_continuous = messagebox.askyesno(
+            "Sweep Mode",
+            "Save preset as continuous sweep?\nYes = Continuous (INIT:CONT ON)\nNo = Single (INIT:CONT OFF)"
+        )
+
         # Read current settings from settings.json
         with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
             current_settings = json.load(f)
+
+        current_settings["INIT:CONT"] = "ON" if mode_continuous else "OFF"
 
         # Save to the chosen preset file
         with open(preset_path, "w", encoding="utf-8") as f:
             json.dump(current_settings, f, indent=2, ensure_ascii=False)
 
-        messagebox.showinfo("Preset Saved", f"Preset saved to {preset_path}")
+        messagebox.showinfo(
+            "Preset Saved",
+            f"Preset saved to {preset_path}\nSweep Mode: {'Continuous' if mode_continuous else 'Single'}"
+        )
     
     def load_preset(self):
         import json
         from tkinter import filedialog, messagebox
+        from pathlib import Path as _Path
 
         # Ask user to select a preset file
         preset_path = filedialog.askopenfilename(
@@ -1933,6 +2739,19 @@ class MainWindow(Frame):
 
             # Reload the GUI to reflect the loaded preset
             self.load_settings()
+            # Record preset base name for future exports (WorkingTitle / CurveDataName)
+            try:
+                self._current_preset_name = _Path(preset_path).stem
+            except Exception:
+                self._current_preset_name = None
+            # Update preset label display
+            try:
+                if self._current_preset_name:
+                    self.preset_label.config(text=f"Preset: {self._current_preset_name}")
+                else:
+                    self.preset_label.config(text="Preset: (none)")
+            except Exception:
+                pass
             messagebox.showinfo("Preset Loaded", f"Preset loaded from {preset_path}")
         except Exception as e:
             messagebox.showerror("Load Error", f"Could not load preset: {e}")
@@ -1940,3 +2759,4 @@ class MainWindow(Frame):
     def update_status(self, msg, color="green"):
         self.status_label.config(text=msg, fg=color)
         self.status_label.update_idletasks()
+        # Keep preset label visible; optionally append to status text if desired (disabled by default)

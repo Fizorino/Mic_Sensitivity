@@ -56,14 +56,17 @@ command_groups = {
         "Ref Imped"                 : "SENS1:POW:REF:RES",
         "Start Cond"                : "TRIG:SOUR",
         "Delay"                     : "TRIG:DEL",
-        "Play bef.Meas"             : "TRIG:PLAY",
         "MAX FFT Size"              : "SENS1:MAX:FFT:SIZE",
     },
     "Analyzer Function": {
         "Function Analyzer"         : "SENS1:FUNC",
         "S/N Sequence"              : "SENS1:FUNC:SNS",
         "Meas Time"                 : "SENS1:FUNC:APER:MODE",
-        "Notch(Gain)"               : "SENS1:NOTCh",
+        "Bandwidth Analyzer Config" : "SENS1:BAND:MODE",
+        "Sweep Ctrl Analyzer Config" : "SENS1:SWE:CONT",
+        "Freq Mode"                 : "SENS1:FREQ:SEL",
+        "Factor"                    : "SENS1:FREQ:FACT",
+        "Notch(Gain)"               : "SENS1:NOTC",
         "Filter1"                   : "SENS1:FILT1",
         "Filter2"                   : "SENS1:FILT2",
         "Filter3"                   : "SENS1:FILT3",
@@ -169,8 +172,44 @@ def apply_grouped_settings(upv, data=None, config_file=SETTINGS_FILE, status_cal
         else:
             log(f"⚠️ Section '{section}' not found in settings.")
 
-def fetch_and_plot_trace(upv, export_path="sweep_trace.hxml"):
-    """Fetch sweep trace data from UPV, save as .hxml, and plot."""
+    # --- Raw / Ungrouped SCPI keys ---
+    # Some presets may include additional top-level SCPI commands (e.g., "SENS:UNIT", "DISP:SWE1:A:UNIT:TRAC", "INIT:CONT").
+    # These are not part of the GUI's grouped sections but the user expects them to be applied automatically.
+    # Send any top-level key that:
+    #   * is not one of the defined section names
+    #   * has a non-dict value
+    #   * contains at least one colon (heuristic for SCPI command)
+    # Skip keys we intentionally interpret elsewhere (e.g., INIT:CONT used later to decide sweep mode).
+    RAW_EXCLUDE = {"INIT:CONT", "SweepMode", "ContinuousSweep"}  # handled in runtime logic
+    try:
+        for key, value in data.items():
+            if key in command_groups:  # section dicts already processed
+                continue
+            if isinstance(value, dict):  # only leaf values
+                continue
+            if key in RAW_EXCLUDE:
+                continue
+            if ':' in key:
+                try:
+                    upv.write(f"{key} {value}")
+                    log(f"   ✓ (raw) {key}: {value}")
+                except Exception as e:
+                    log(f"   ❌ (raw) Failed {key}: {e}")
+    except Exception as e:
+        log(f"⚠️ Raw SCPI application phase encountered an error: {e}")
+
+def fetch_and_plot_trace(upv, export_path="sweep_trace.hxml", working_title=None):
+    """Fetch sweep trace data from UPV, save as .hxml, and plot.
+
+    Parameters:
+        upv: VISA instrument handle
+        export_path (str|Path): destination .hxml path (user-chosen file name)
+        working_title (str|None): preset file stem to use for dataset WorkingTitle. If None, falls back to export file stem.
+
+    Behavior change:
+        - WorkingTitle attribute: based on preset (working_title param) if provided
+        - CurveDataName attribute: always based on the user-typed export file name stem
+    """
     try:
         print("📊 Fetching Sweep trace data directly from UPV...")
 
@@ -184,6 +223,70 @@ def fetch_and_plot_trace(upv, export_path="sweep_trace.hxml"):
 
         now = datetime.datetime.now().strftime("%d-%b-%Y %H:%M:%S")
 
+        # Derive dynamic dataset WorkingTitle (preset focused):
+        # Priority: explicit working_title (preset stem) > export file stem > default fallback
+        if isinstance(working_title, str) and working_title.strip():
+            working_title_raw = working_title.strip()
+        else:
+            try:
+                working_title_raw = Path(export_path).stem if export_path else "Mic Sensitivity"
+                if not working_title_raw:
+                    working_title_raw = "Mic Sensitivity"
+            except Exception:
+                working_title_raw = "Mic Sensitivity"
+
+        # Simple XML escape for attribute context
+        def _xml_escape(s: str) -> str:
+            return (s.replace('&', '&amp;')
+                     .replace('"', '&quot;')
+                     .replace("'", '&apos;')
+                     .replace('<', '&lt;')
+                     .replace('>', '&gt;'))
+
+        working_title_xml = _xml_escape(working_title_raw)
+
+        # CurveDataName must always reflect exactly the user-chosen export file name (file name with extension)
+        try:
+            curve_data_name_raw = Path(export_path).name if export_path else "sweep_trace.hxml"
+            if not curve_data_name_raw:
+                curve_data_name_raw = "sweep_trace.hxml"
+        except Exception:
+            curve_data_name_raw = "sweep_trace.hxml"
+        curve_data_name_xml = _xml_escape(curve_data_name_raw)
+
+        # Determine Y-axis / magnitude units from current settings (SENS:UNIT) if available
+        # Fallback to dBV if not specified. Accept common variants.
+        try:
+            y_unit_raw = None
+            if Path(SETTINGS_FILE).exists():
+                with open(SETTINGS_FILE, 'r', encoding='utf-8') as sf:
+                    settings_data = json.load(sf)
+                    y_unit_raw = settings_data.get('SENS:UNIT') or settings_data.get('SENS1:UNIT')
+            if isinstance(y_unit_raw, str):
+                yu = y_unit_raw.strip().upper()
+                unit_map = {
+                    'DBR': 'dBr',
+                    'DBV': 'dBV',
+                    'DBU': 'dBu',
+                    'DBM': 'dBm',
+                    'V': 'V',
+                    'MV': 'mV',
+                    'UV': 'μV',
+                    'UVR': 'μV',
+                    'UV RMS': 'μV',
+                    'UVRMS': 'μV',
+                    'PCT': '%',
+                    '%': '%'
+                }
+                y_unit_display = unit_map.get(yu, y_unit_raw.strip())
+            else:
+                y_unit_display = 'dBV'
+        except Exception:
+            y_unit_display = 'dBV'
+
+        # For HXML attribute, use the same token (without spaces)
+        hxml_y_unit = y_unit_display.replace(' ', '')
+
         with open(export_path, "w", encoding="utf-8") as f:
             f.write('<?xml version="1.0" encoding="utf-8"?>\n')
             f.write("<hxml>\n")
@@ -196,18 +299,19 @@ def fetch_and_plot_trace(upv, export_path="sweep_trace.hxml"):
             f.write("    </Document>\n")
             f.write("  </head>\n")
             f.write("  <data>\n")
-            f.write("    <dataset WorkingTitle=\"Mic Sensitivity\">\n")
+            f.write(f"    <dataset WorkingTitle=\"{working_title_xml}\">\n")
             f.write("      <longDataSetDesc/>\n")
             f.write("      <shortDataSetDesc/>\n")
             f.write("      <acpEarhookType/>\n")
             f.write("      <v-curvedata>\n")
-            f.write(f"        <curvedata CurveDataName=\"Mic_Sensitivity\" MeasurementDate=\"{now}\"\n")
+            # CurveDataName now strictly equals the saved file name (may differ from WorkingTitle/preset)
+            f.write(f"        <curvedata CurveDataName=\"{curve_data_name_xml}\" MeasurementDate=\"{now}\"\n")
             f.write("                   TestEquipmentNr=\"UPV_Audio_Analyzer\"\n")
             f.write("                   Tester=\"PythonApp\">\n")
             f.write("          <longCurveDesc/>\n")
             f.write("          <shortCurveDesc/>\n")
             f.write("          <curve name=\"frequency\" unit=\"Hz\">[" + " ".join(f"{x:.6f}" for x in x_vals) + "]</curve>\n")
-            f.write("          <curve name=\"magnitude\" unit=\"dBV\">[" + " ".join(f"{y:.6f}" for y in y_vals) + "]</curve>\n")
+            f.write(f"          <curve name=\"magnitude\" unit=\"{hxml_y_unit}\">[" + " ".join(f"{y:.6f}" for y in y_vals) + "]</curve>\n")
             f.write("        </curvedata>\n")
             f.write("      </v-curvedata>\n")
             f.write("    </dataset>\n")
@@ -219,9 +323,16 @@ def fetch_and_plot_trace(upv, export_path="sweep_trace.hxml"):
         # Plot (Logarithmic X-Axis)
         plt.figure(figsize=(10, 6))
         plt.semilogx(x_vals, y_vals)
-        plt.title("Sweep Measurement Result")
+        # Use the saved file's base name (without extension) as the plot title
+        try:
+            file_title = Path(export_path).stem if export_path else "Sweep Measurement Result"
+            if not file_title:
+                file_title = "Sweep Measurement Result"
+        except Exception:
+            file_title = "Sweep Measurement Result"
+        plt.title(file_title)
         plt.xlabel("Frequency (Hz)")
-        plt.ylabel("Level (dBV)")
+        plt.ylabel(f"Level ({y_unit_display})")
         plt.grid(True, which="both", ls="--", linewidth=0.5)
         plt.tight_layout()
         plt.show()

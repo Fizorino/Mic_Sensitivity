@@ -1,7 +1,5 @@
 {
-  "SENS:UNIT": "DBR",
-  "SENS:UNA": "ON",
-  "DISP:SWE1:A:UNIT:TRAC": "ON",
+  "INIT:CONT": "ON",
   "Generator Config": {
     "Instrument Generator": "ANLG",
     "Channel Generator": "CH1",
@@ -11,13 +9,14 @@
     "Bandwidth Generator": "B22",
     "Volt Range (Auto/Fix)": "AUTO",
     "Max Voltage": "10 V",
-    "Ref Voltage": "-91.15 dBV",
+    "Ref Voltage": "-91.60 dBV",
     "Ref Frequency": "1000 Hz"
   },
   "Generator Function": {
     "Function Generator": "SIN",
     "Low Dist": "OFF",
-    "Sweep Ctrl": "ASW",
+    "Sweep Ctrl": "OFF",
+    "Frequency": "12000 Hz",
     "Next Step": "ASYN",
     "X Axis": "FREQ",
     "Z Axis": "OFF",
@@ -26,11 +25,10 @@
     "Stop": "20000 Hz",
     "Points": "101",
     "Halt": "MUTE",
-    "Voltage": "94 dBr",
+    "Voltage": "70 dBr",
     "Filter": "OFF",
     "Equalizer": "ON",
-    "DC Offset": "OFF",
-    "Frequency": "1000 Hz"
+    "DC Offset": "OFF"
   },
   "Analyzer Config": {
     "Instrument Analyzer": "ANLG",
@@ -45,6 +43,7 @@
     "Ref Imped": "600 ohm",
     "Start Cond": "AUTO",
     "Delay": "0 s",
+    "Play bef.Meas": "OFF",
     "MAX FFT Size": "S256K"
   },
   "Analyzer Function": {

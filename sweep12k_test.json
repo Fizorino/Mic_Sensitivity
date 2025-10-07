@@ -1,36 +1,33 @@
 {
-  "SENS:UNIT": "DBR",
-  "SENS:UNA": "ON",
-  "DISP:SWE1:A:UNIT:TRAC": "ON",
   "Generator Config": {
     "Instrument Generator": "ANLG",
     "Channel Generator": "CH1",
     "Output Type (Unbal/Bal)": "UNB",
-    "Impedance": "R5",
+    "Impedance": "R10",
     "Common (Float/Ground)": "GRO",
     "Bandwidth Generator": "B22",
     "Volt Range (Auto/Fix)": "AUTO",
     "Max Voltage": "10 V",
-    "Ref Voltage": "-91.15 dBV",
-    "Ref Frequency": "1000 Hz"
+    "Ref Voltage": "-91.5999984741 DBV",
+    "Ref Frequency": "1000 HZ"
   },
   "Generator Function": {
     "Function Generator": "SIN",
     "Low Dist": "OFF",
-    "Sweep Ctrl": "ASW",
+    "Sweep Ctrl": "OFF",
+    "Frequency": "12000 HZ",
     "Next Step": "ASYN",
     "X Axis": "FREQ",
     "Z Axis": "OFF",
     "Spacing": "LOGP",
-    "Start": "100 Hz",
-    "Stop": "20000 Hz",
+    "Start": "100 HZ",
+    "Stop": "10000 HZ",
     "Points": "101",
     "Halt": "MUTE",
-    "Voltage": "94 dBr",
+    "Voltage": "70 DBR",
     "Filter": "OFF",
     "Equalizer": "ON",
-    "DC Offset": "OFF",
-    "Frequency": "1000 Hz"
+    "DC Offset": "OFF"
   },
   "Analyzer Config": {
     "Instrument Analyzer": "ANLG",
@@ -42,24 +39,25 @@
     "CH1 Impedance": "R200K",
     "CH1 Ground/Common": "GRO",
     "CH1 Range": "AUTO",
-    "Ref Imped": "600 ohm",
+    "Ref Imped": "600 OHM",
     "Start Cond": "AUTO",
-    "Delay": "0 s",
+    "Delay": "0 S",
     "MAX FFT Size": "S256K"
   },
   "Analyzer Function": {
     "Function Analyzer": "RMS",
     "S/N Sequence": "OFF",
     "Meas Time": "GENT",
+    "Sweep Ctrl Analyzer Config": "OFF",
     "Notch(Gain)": "OFF",
     "Filter1": "OFF",
     "Filter2": "OFF",
     "Filter3": "OFF",
     "Fnct Settling": "EXP",
     "Samples": "3",
-    "Tolerance": "0.1 %",
-    "Resolution": "0.1 dBV",
-    "Timeout": "10 s",
+    "Tolerance": "0.10000000149 PCT",
+    "Resolution": "0.10000050813 DBV",
+    "Timeout": "10 S",
     "Bargraph": "OFF",
     "POST FFT": "OFF",
     "Level Monitor": "OFF",
@@ -67,5 +65,6 @@
     "Input Monitor": "OFF",
     "Freq/Phase": "OFF",
     "Waveform": "OFF"
-  }
+  },
+  "INIT:CONT": "OFF"
 }

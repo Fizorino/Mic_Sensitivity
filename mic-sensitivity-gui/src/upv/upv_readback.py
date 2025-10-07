@@ -61,6 +61,12 @@ SPECIAL_QUERY_COMMANDS = {
 # Labels we should skip entirely (rare / not readable)
 SKIP_LABELS = set()
 
+# UPV sometimes returns the IEEE-754 single-precision max (3.402823E+38) for
+# parameters that are not valid in the current function / mode (e.g. Freq Mode,
+# Factor or Bandwidth config when Function Analyzer = RMS). Treat these as
+# 'unavailable' instead of persisting a misleading numeric literal.
+SENTINEL_FLOAT_MAX_VALUES = {"3.402823E+38", "3.402823e+38"}
+
 
 def _derive_query(scpi: str, label: str) -> str | None:
     """Return the SCPI query form for a given base command.
@@ -102,6 +108,14 @@ def read_current_settings(upv) -> Dict[str, Dict[str, Any]]:
                 # Basic normalization: remove enclosing quotes if any
                 if resp.startswith('"') and resp.endswith('"') and len(resp) >= 2:
                     resp = resp[1:-1]
+                # Skip sentinel max-float values (unavailable / N/A in this mode)
+                if resp in SENTINEL_FLOAT_MAX_VALUES:
+                    # Option 1: skip entirely (do not include key) – chosen to avoid
+                    # later UI showing a huge number. If you prefer keeping the key
+                    # with an empty string, replace the 'continue' with:
+                    #   resp = ""
+                    #   section_out[label] = resp
+                    continue
                 section_out[label] = resp
             except Exception as e:
                 print(f"⚠️ Query failed for {section}/{label} ({q}): {e}")

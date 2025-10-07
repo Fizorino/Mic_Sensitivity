@@ -1,7 +1,4 @@
 {
-  "SENS:UNIT": "DBR",
-  "SENS:UNA": "ON",
-  "DISP:SWE1:A:UNIT:TRAC": "ON",
   "Generator Config": {
     "Instrument Generator": "ANLG",
     "Channel Generator": "CH1",
@@ -18,6 +15,7 @@
     "Function Generator": "SIN",
     "Low Dist": "OFF",
     "Sweep Ctrl": "ASW",
+    "Frequency": "1000 Hz",
     "Next Step": "ASYN",
     "X Axis": "FREQ",
     "Z Axis": "OFF",
@@ -29,8 +27,7 @@
     "Voltage": "94 dBr",
     "Filter": "OFF",
     "Equalizer": "ON",
-    "DC Offset": "OFF",
-    "Frequency": "1000 Hz"
+    "DC Offset": "OFF"    
   },
   "Analyzer Config": {
     "Instrument Analyzer": "ANLG",
@@ -48,9 +45,13 @@
     "MAX FFT Size": "S256K"
   },
   "Analyzer Function": {
-    "Function Analyzer": "RMS",
+    "Function Analyzer": "RMSS",
     "S/N Sequence": "OFF",
     "Meas Time": "GENT",
+    "Bandwidth Analyzer Config": "PTOC",
+    "Sweep Ctrl Analyzer Config": "OFF",
+    "Freq Mode": "GENT",
+    "Factor": "1",
     "Notch(Gain)": "OFF",
     "Filter1": "OFF",
     "Filter2": "OFF",

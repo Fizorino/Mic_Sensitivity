@@ -3,13 +3,13 @@
 #     "ANLG": "Analog",
 #     "DIG": "Digital",
 #     "I2SB": "I2S Board",
-#     "IMPairment": "Digital Impairment",
-#     "U2Channel": "USI Dual Chan",
+#     "IMP": "Digital Impairment",
+#     "U2C": "USI Dual Chan",
 
-#     "A8CHannel": "Analog 8 Chan",
-#     "A16CHannel": "Analog 16 Chan",
-#     "U8CHannel": "USI 8 Chan",
-#     "DIGBitstream": "Dig Bitstream",
+#     "A8CH": "Analog 8 Chan",
+#     "A16CH": "Analog 16 Chan",
+#     "U8CH": "USI 8 Chan",
+#     "DIGB": "Dig Bitstream",
 
 #     "OFF": "Off",
 #     "CH1": "1",
@@ -119,17 +119,27 @@
 #     "AC": "AC",
 #     "DC": "DC",
 
+#     "DBR": "dBr",
+
 
 # }
 
+# Friendly display label overrides (UI label -> shorter label) while keeping internal JSON keys
+DISPLAY_LABEL_OVERRIDES = {
+    "Bandwidth Analyzer Config": "Bandwidth",
+    "Sweep Ctrl Analyzer Config": "Sweep Ctrl",
+    "Filter1": "Filter",
+    "Filter2": "Filter",
+    "Filter3": "Filter",
+}
 
 #Generator Config
 INSTRUMENT_GENERATOR_OPTIONS = {
     "ANLG": "Analog",
     "DIG": "Digital",
     "I2S": "I2S Board",
-    "IMPairment": "Digital Impairment",
-    "U2Channel": "USI Dual Chan"
+    "IMP": "Digital Impairment",
+    "U2C": "USI Dual Chan"
 }
 
 CHANNEL_GENERATOR_OPTIONS = {
@@ -141,9 +151,7 @@ CHANNEL_GENERATOR_OPTIONS = {
 
 OUTPUT_TYPE_OPTIONS = {
     "UNB": "Unbal",
-    "UNBalanced": "Unbal",
-    
-    "BALanced": "Bal"
+    "BAL": "Bal"
 }
 IMPEDANCE_OPTIONS_BAL = {
     "R10": "10 Ω",
@@ -174,15 +182,15 @@ VOLT_RANGE_OPTIONS = {
 
 #Generator Function
 FUNCTION_GENERATOR_OPTIONS = {
-    "SINusoid": "Sine",
-    "STEReo": "Stereo Sine",
+    "SIN": "Sine",
+    "STER": "Stereo Sine",
     "MULTI": "Multisine",
     "BURST": "Sine Burst",
-    "S2Pulse": "Sine² Pulse",
-    "MDISt": "Mod Dist",
+    "S2P": "Sine² Pulse",
+    "MDIS": "Mod Dist",
     "DFD": "DFD",
     "DIM": "DIM",
-    "RANDom": "Random",
+    "RAND": "Random",
     "ARB": "Arbitrary",
     "PLAY": "Play",
     "PLYA": "Play+Anlr",
@@ -200,32 +208,32 @@ LOW_DIST_OPTIONS = {
 
 SWEEP_CTRL_OPTIONS = {
     "OFF": "Off",
-    "ASWeep": "Auto Sweep",
+    "ASW": "Auto Sweep",
     "ALIS": "Auto List"
 }
 
 NEXT_STEP_OPTIONS = {
-    "ASYNc": "Anlr Sync",
+    "ASYN": "Anlr Sync",
     "LIST": "Dwell File",
     "DWELl": "Dwell Value",    
 }
 
 X_AXIS_OPTIONS = {
-    "VOLTage": "Voltage",
-    "FREQuency": "Frequency"
+    "VOLT": "Voltage",
+    "FREQ": "Frequency"
 }
 
 Z_AXIS_OPTIONS = {
     "OFF": "Off",
-    "VOLTage": "Voltage",
-    "FREQuency": "Frequency"
+    "VOLT": "Voltage",
+    "FREQ": "Frequency"
 }
 
 SPACING_OPTIONS = {
-    "LINPoints": "Lin Points",
-    "LINSteps": "Lin Steps",
-    "LOGPoints": "Log Points",
-    "LOGSteps": "Log Steps"
+    "LINP": "Lin Points",
+    "LINS": "Lin Steps",
+    "LOGP": "Log Points",
+    "LOGS": "Log Steps"
 }
 
 FILTER_OPTIONS = {
@@ -285,13 +293,13 @@ DC_OFFSET_OPTIONS = {
 #Analyzer Config
 INSTRUMENT_ANALYZER_OPTIONS = {
     "ANLG": "Analog",
-    "A8CHannel": "Analog 8 Chan",
-    "A16CHannel": "Analog 16 Chan",
+    "A8CH": "Analog 8 Chan",
+    "A16CH": "Analog 16 Chan",
     "DIG": "Digital",
     "I2S": "I2S Board",
-    "U2Channel": "USI Dual Chan",
-    "U8CHannel": "USI 8 Chan",
-    "DIGBitstream": "Dig Bitstream",
+    "U2CH": "USI Dual Chan",
+    "U8CH": "USI 8 Chan",
+    "DIGB": "Dig Bitstream",
 }
 
 CHANNEL_ANALYZER_OPTIONS = {
@@ -353,7 +361,7 @@ PRE_FILTER_OPTIONS = {
 }
 
 CH1_INPUT_OPTIONS = {
-    "BALanced": "BAL",
+    "BAL": "Bal",
     "GEN1": "GEN CH1",
     "GEN2": "GEN CH2"
 }
@@ -365,8 +373,8 @@ CH1_IMPEDANCE_OPTIONS = {
 }
 
 CH1_COMMON_OPTIONS = {
-    "FLOat": "Float",
-    "GROund": "Ground",
+    "FLO": "Float",
+    "GRO": "Ground",
 }
 
 CH1_RANGE_OPTIONS = {
@@ -377,13 +385,13 @@ CH1_RANGE_OPTIONS = {
 
 START_COND_OPTIONS = {
     "AUTO": "Auto",
-    "TIMer": "Time Tick",
-    "TCHart": "Time Chart",
-    "CH1Freq": "Freq Ch1",
-    "CH1Rapidfreq": "Freq Fast Ch1",
-    "CH1Level" : "Volt Ch1",
-    "CH1Trigger": "Lev Trig Ch1",
-    "CH1Edgetrigger": "Edge Trig Ch1"
+    "TIM": "Time Tick",
+    "TCH": "Time Chart",
+    "CH1F": "Freq Ch1",
+    "CH1R": "Freq Fast Ch1",
+    "CH1L" : "Volt Ch1",
+    "CH1T": "Lev Trig Ch1",
+    "CH1E": "Edge Trig Ch1"
 }
 
 MAX_FFT_SIZE_OPTIONS = {
@@ -402,34 +410,34 @@ MAX_FFT_SIZE_OPTIONS = {
 FUNCTION_ANALYZER_OPTIONS = {
     "OFF": "Off",
     "RMS": "RMS",
-    "RMSSelect": "RMS Selective",
+    "RMSS": "RMS Selective",
     "PEAK": "Peak",
-    "QPEak": "Quasi Peak",
+    "QPE": "Quasi Peak",
     "SN": "S/N",
     "DC": "DC",
     "FFT": "FFT",
     "THD": "THD",
-    "THDNsndr": "THD+N SINAD",
-    "MDISt": "Mod DIst",
+    "THDN": "THD+N SINAD",
+    "MDIS": "Mod DIst",
     "DFD": "DFD",
     "DIM": "DIM",
-    "POLarity": "Polarity",
-    "RUBBuzz": "RUB Buzz",
-    "RECord": "Record",
-    "NOCTave": "1/n Octave",
+    "POL": "Polarity",
+    "RUBB": "RUB Buzz",
+    "REC": "Record",
+    "NOCT": "1/n Octave",
     "PESQ": "PESQ",
-    "PLUGin": "PLUGin",
+    "PLUG": "PLUGin",
     "PEAQ": "PEAQ",
-    "COHerence": "Transfer Co",
-    "POLQa": "POLQA",
-    "CHIRpbased": "Chirpbased Meas"
+    "COH": "Transfer Co",
+    "POLQ": "POLQA",
+    "CHIR": "Chirpbased Meas"
 }
 
 MEAS_TIME_OPTIONS = {
     "AFASt": "Auto Fast",
     "AUTO": "Auto",
     "VALue": "Value",
-    "GENTrack": "Gen Track"
+    "GENT": "Gen Track"
 }
 
 NOTCH_OPTIONS = {
@@ -554,9 +562,9 @@ FILTER3_OPTIONS = {
 
 FNCT_SETTLING_OPTIONS = {
     "OFF": "Off",
-    "EXPonential": "Exponential",
+    "EXP": "Exponential",
     "FLAT": "Flat",
-    "AVERage": "Average"
+    "AVER": "Average"
 }
 LEVEL_MONITOR_OPTIONS = {
     "OFF": "Off",
@@ -567,8 +575,8 @@ LEVEL_MONITOR_OPTIONS = {
 
 SECOND_MONITOR_OPTIONS = {
     "OFF": "Off",
-    "INPut": "Input Monitor",
-    "LEVel": "Level Monitor"
+    "INP": "Input Monitor",
+    "LEV": "Level Monitor"
 }
 INPUT_MONITOR_OPTIONS = {
     "OFF": "Off",
@@ -576,5 +584,26 @@ INPUT_MONITOR_OPTIONS = {
 }
 FREQ_OPTIONS = {
     "OFF": "Off",
-    "FREQuency": "Frequency"
+    "FREQ": "Frequency"
+}
+
+BANDWIDTH_ANALYZER_CONFIG_OPTIONS = {
+    "PPCT1": "BP 1 %",
+    "PPCT3": "BP 3 %",
+    "POCT12": "BP 1/12 Oct",
+    "PTOC": "BP 1/3 Oct",
+    "PFAS": "BP 1/3 Oct Fast",
+    "PFIXED": "BP Fixed",
+    "SPCT1": "BS 1 %",
+    "SPCT3": "BS 3 %",
+    "SOCT12": "BS 1/12 Oct",
+    "STOC": "BS 1/3 Oct",
+    "SFAS": "BS 1/3 Oct Fast",
+    "SFIX": "BS Fixed"
+    }
+
+FREQ_MODE_OPTIONS = {
+    "FIXed": "Fixed",
+    "GENT": "Gen Track",
+    "CH1F": "Freq Ch1",
 }
