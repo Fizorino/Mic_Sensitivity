@@ -2,6 +2,9 @@ from cProfile import label
 import pyvisa
 import json
 import math
+import threading
+import time  # added for non-blocking sweep polling
+import queue  # NEW: for decoupling acquisition from GUI
 from pathlib import Path
 from tkinter import Tk, Frame, Button, Label, filedialog, messagebox, Canvas, Scrollbar
 from upv.upv_auto_config import find_upv_ip, apply_grouped_settings, fetch_and_plot_trace, load_config, save_config
@@ -16,6 +19,9 @@ from gui.display_map import (
 )
 
 SETTINGS_FILE = r"c:\Users\AU001A0W\OneDrive - WSA\Documents\Mic_Sensitivity\settings.json"
+# Default preset base name (without .json). When user edits any control after loading a non-default preset,
+# the active preset label reverts to this default to signal divergence from the loaded preset.
+DEFAULT_PRESET_NAME = "settings"  # Changed from 'main_settings' per user request
 
 reverse_output_type_map = {v: k for k, v in OUTPUT_TYPE_OPTIONS.items()}
 
@@ -24,7 +30,7 @@ class MainWindow(Frame):
         super().__init__(master)
         self.run_upv_callback = run_upv_callback
         self.master = master
-        self.master.title("Mic Sensitivity GUI")
+        self.master.title("UPV GUI")
         self.master.geometry("1200x700")  # Wider window for all sections
 
         self.top_frame = Frame(self.master)
@@ -38,13 +44,14 @@ class MainWindow(Frame):
         self.left_frame = Frame(self.top_frame)
         self.left_frame.pack(side="left", padx=(0, 20), anchor="n")
 
-        Label(self.left_frame, text="Mic Sensitivity Control", font=("Helvetica", 16)).pack(pady=10)
+        Label(self.left_frame, text="UPV GUI", font=("Helvetica", 16)).pack(pady=10)
 
         # Use grid for button rows to prevent shifting
         btn_width = 18
         button_row1 = Frame(self.left_frame)
         button_row1.pack(pady=5)
         btn1 = Button(button_row1, text="Connect to UPV", command=self.connect_to_upv, width=btn_width)
+        self.connect_btn = btn1
         btn2 = Button(button_row1, text="Save Preset", command=self.save_preset, width=btn_width)
         btn1.grid(row=0, column=0, padx=(0, 8), pady=0)
         btn2.grid(row=0, column=1, padx=(0, 0), pady=0)
@@ -75,12 +82,20 @@ class MainWindow(Frame):
 
         # Internal state tracking for continuous sweep
         self._continuous_active = False
-        # Track currently loaded preset base name for export working title
-        self._current_preset_name = None
+        # Track if a single (non-continuous) sweep is currently running so we can live-update
+        self._single_sweep_in_progress = False
+        # Track currently loaded preset base name for export working title (default active at startup)
+        self._current_preset_name = DEFAULT_PRESET_NAME
 
         # Snapshot (read-back) button
         btn_snapshot = Button(self.left_frame, text="Snapshot Settings", command=self.snapshot_upv, width=btn_width)
         btn_snapshot.pack(pady=2)
+
+        # Show Sweep Display (instrument + embedded plot)
+        btn_show_disp = Button(self.left_frame, text="Show Sweep Display", command=self.show_sweep_display, width=btn_width)
+        btn_show_disp.pack(pady=2)
+        # Keep reference to display button (we may disable/hide if switching to fully automatic live view later)
+        self._show_display_btn = btn_show_disp
 
         # Right spacer
         self.right_spacer = Frame(self.top_frame)
@@ -88,8 +103,8 @@ class MainWindow(Frame):
 
         self.status_label = Label(self.left_frame, text="", fg="green")
         self.status_label.pack(pady=10)
-        # Display currently loaded preset (if any)
-        self.preset_label = Label(self.left_frame, text="Preset: (none)", fg="#555555")
+        # Display currently loaded preset (default on startup)
+        self.preset_label = Label(self.left_frame, text=f"Preset: {self._current_preset_name}", fg="#555555")
         self.preset_label.pack(pady=(0,8))
 
         # 2x2 grid container for four independently scrollable panels
@@ -120,6 +135,240 @@ class MainWindow(Frame):
         self.upv = None
         # Ensure initial state
         self._refresh_start_sweep_state()
+        # Connection state helpers
+        self._connecting = False
+        self._scan_anim_phase = 0
+        # Cached display frequency limits (fmin, fmax) from instrument display (DISP:SWE:A:BOTT?/TOP?)
+        self._display_freq_limits = None  # (fmin, fmax)
+        self._display_amp_limits = None   # (amin, amax) from DISP:SWE:A:BOTT?/TOP?
+        # Simple counter to throttle SCPI queries for display limits during live polling
+        self._display_axis_query_counter = 0
+        # Persistently locked Y-limits (once fetched from instrument) so plot does not rescale
+        self._locked_y_limits = None
+        # Thread-safe VISA access & background acquisition pipeline
+        self._visa_lock = threading.Lock()
+        self._data_queue = queue.Queue(maxsize=2)  # keep freshest sample pairs only
+        self._acq_thread = None
+        self._acq_stop_event = threading.Event()
+        self._acq_fail_count = 0
+        self._live_consumer_started = False
+
+    # ---------------- Safe VISA Helpers -----------------
+    def _safe_query(self, cmd: str, *, timeout_ms: int = 1500, strip: bool = True):
+        """Thread-safe query that enforces a temporary timeout and never blocks GUI.
+
+        Returns: response string (optionally stripped) or None on failure/timeout.
+        """
+        upv = self.upv
+        if upv is None:
+            return None
+        try:
+            with self._visa_lock:
+                old_timeout = getattr(upv, 'timeout', None)
+                if old_timeout is not None:
+                    try:
+                        upv.timeout = timeout_ms
+                    except Exception:
+                        pass
+                try:
+                    resp = upv.query(cmd)
+                finally:
+                    if old_timeout is not None:
+                        try:
+                            upv.timeout = old_timeout
+                        except Exception:
+                            pass
+            if strip and isinstance(resp, str):
+                return resp.strip()
+            return resp
+        except Exception:
+            return None
+
+    def _safe_write(self, cmd: str):
+        upv = self.upv
+        if upv is None:
+            return False
+        try:
+            with self._visa_lock:
+                upv.write(cmd)
+            return True
+        except Exception:
+            return False
+
+    # ---------------- Shared Unit Resolution -----------------
+    def _resolve_y_unit_from_settings(self):
+        """Replicate unit resolution logic used in fetch_and_plot_trace.
+
+        Priority:
+          1. SENS:USER (sanitized) if present and non-empty
+          2. SENS:UNIT or SENS1:UNIT (mapped to display forms)
+          3. Fallback 'dBV'
+        Returns sanitized display string.
+        """
+        try:
+            import json as _json
+            from pathlib import Path as _Path
+            if not _Path(SETTINGS_FILE).exists():
+                return 'dBV'
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as sf:
+                data = _json.load(sf)
+            user_unit_raw = data.get('SENS:USER')
+            std_unit_raw = data.get('SENS:UNIT') or data.get('SENS1:UNIT')
+
+            def _sanitize_user_unit(s: str) -> str:
+                if not isinstance(s, str):
+                    return ''
+                s2 = s.strip().strip('"').strip("'")
+                low = s2.lower()
+                if low.startswith('db'):
+                    rest = s2[2:].lstrip()
+                    tokens = rest.split()
+                    tokens = [t.upper() if t.lower() == 'spl' else t for t in tokens]
+                    if tokens:
+                        return 'dB ' + ' '.join(tokens)
+                    return 'dB'
+                return s2
+
+            if isinstance(user_unit_raw, str) and user_unit_raw.strip():
+                cand = _sanitize_user_unit(user_unit_raw)
+                if cand:
+                    return cand
+            if isinstance(std_unit_raw, str):
+                yu = std_unit_raw.strip().upper()
+                unit_map = {
+                    'DBR': 'dBr', 'DBV': 'dBV', 'DBU': 'dBu', 'DBM': 'dBm',
+                    'V': 'V', 'MV': 'mV', 'UV': 'μV', 'UVR': 'μV', 'UV RMS': 'μV',
+                    'UVRMS': 'μV', 'PCT': '%', '%': '%'
+                }
+                return unit_map.get(yu, std_unit_raw.strip())
+        except Exception:
+            pass
+        return 'dBV'
+
+    def _freeze_axis_limits(self, ax, x_vals, y_vals):
+        """Deprecated: retained for backward compatibility (no-op after fixed range change)."""
+        try:
+            # No action; fixed frequency range logic now applied via _apply_fixed_freq_and_auto_level.
+            return
+        except Exception:
+            pass
+
+    # New helper now locking Y-axis strictly to instrument limits once acquired.
+    def _apply_fixed_freq_and_auto_level(self, ax, x_vals, y_vals):  # keeping name for compatibility
+        """Apply fixed X (100–12k Hz) and lock Y to instrument limits ONLY when they become non-trivial.
+
+        Rules:
+          1. Query DISP:SWE:A:BOTT?/TOP? each call until a NON-TRIVIAL span is found.
+             A span is considered trivial if:
+                - (amin, amax) == (0, 1) OR
+                - amax - amin < 0.5 (very small) OR
+                - amin == amax
+          2. Before lock is established, fall back to data-driven autoscale (with 5% padding) so the user sees data.
+          3. Once a valid span is acquired it is frozen in self._locked_y_limits and reused thereafter.
+          4. If no data yet and no valid span, show provisional (0,1) once (avoid flicker) until something better arrives.
+        """
+        try:
+            FMIN, FMAX = 100.0, 12000.0
+            try:
+                ax.set_xlim(FMIN, FMAX)
+            except Exception:
+                pass
+
+            have_data = bool(x_vals) and bool(y_vals)
+
+            # If already locked, just apply and exit
+            if self._locked_y_limits is not None:
+                try:
+                    ax.set_ylim(*self._locked_y_limits)
+                except Exception:
+                    pass
+                return
+
+            # Attempt to read instrument limits
+            inst_limits = None
+            if self.upv is not None:
+                try:
+                    amin_q = float(self.upv.query("DISP:SWE:A:BOTT?").strip())
+                    amax_q = float(self.upv.query("DISP:SWE:A:TOP?").strip())
+                    if amax_q > amin_q:
+                        inst_limits = (amin_q, amax_q)
+                        self._display_amp_limits = inst_limits
+                except Exception:
+                    inst_limits = self._display_amp_limits  # cached (may be None)
+            else:
+                inst_limits = self._display_amp_limits
+
+            locked_this_call = False
+            if inst_limits is not None:
+                amin, amax = inst_limits
+                span = amax - amin
+                trivial = (
+                    (abs(amin) < 1e-9 and abs(amax - 1.0) < 1e-9) or  # exactly 0..1
+                    span < 0.5 or
+                    amax <= amin
+                )
+                if not trivial:
+                    # Lock now
+                    self._locked_y_limits = inst_limits
+                    locked_this_call = True
+
+            if self._locked_y_limits is not None:
+                # Apply locked (either from this call or previously)
+                try:
+                    ax.set_ylim(*self._locked_y_limits)
+                except Exception:
+                    pass
+                # Optional: surface once that we locked
+                if locked_this_call:
+                    try:
+                        self.update_status(f"Y locked: {self._locked_y_limits[0]:.2f}..{self._locked_y_limits[1]:.2f}")
+                    except Exception:
+                        pass
+                return
+
+            # Not locked yet -> fallback to data autoscale so user sees something meaningful
+            if have_data:
+                ys_window = [y for x, y in zip(x_vals, y_vals) if FMIN <= x <= FMAX]
+                if not ys_window:
+                    ys_window = y_vals
+                try:
+                    dmin = min(ys_window)
+                    dmax = max(ys_window)
+                    if dmax == dmin:
+                        dmin -= 0.1
+                        dmax += 0.1
+                    span = dmax - dmin
+                    pad = span * 0.05 if span > 0 else 0.5
+                    ymin = dmin - pad
+                    ymax = dmax + pad
+                except Exception:
+                    ymin, ymax = 0.0, 1.0
+            else:
+                ymin, ymax = 0.0, 1.0
+
+            try:
+                ax.set_ylim(ymin, ymax)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    # ---------------- Connection / Scanning -----------------
+    def _anim_scan_tick(self):
+        """Animate scanning status while background thread searches for UPV."""
+        if not self._connecting:
+            return
+        dots = '.' * (self._scan_anim_phase % 4)
+        base = "Scanning for UPV"  # concise to reduce flicker
+        self.update_status(f"🔍 {base}{dots}", color="green")
+        self._scan_anim_phase += 1
+        self.after(350, self._anim_scan_tick)
+
+    def _thread_safe_status(self, msg, color="green"):
+        try:
+            self.after(0, lambda m=msg, c=color: self.update_status(m, c))
+        except Exception:
+            pass
 
     def _refresh_start_sweep_state(self):
         """Enable Start Sweep only when settings applied AND UPV connected."""
@@ -152,6 +401,8 @@ class MainWindow(Frame):
         # Ensure wheel events go to panel scroll
         combo.unbind("<MouseWheel>")
         self.bind_combobox_mousewheel(combo)
+        # Any combobox selection change marks configuration as modified
+        combo.bind('<<ComboboxSelected>>', lambda e: self._mark_modified(), add='+')
         if entry_key is not None:
             self.entries[entry_key] = combo
         if store_attr:
@@ -1589,7 +1840,8 @@ class MainWindow(Frame):
                         def on_output_type_change(event):
                             selected_display = self.output_type_combo.get()
                             set_impedance_widget(selected_display)
-                        self.output_type_combo.bind("<<ComboboxSelected>>", on_output_type_change)
+                        # Use add='+' so we don't overwrite the preset modification watcher bound in _create_combo
+                        self.output_type_combo.bind("<<ComboboxSelected>>", on_output_type_change, add='+')
 
             # After building all sections, bind sweep control visibility if present
             # (Do this inside outer loop but after each section processed; harmless to re-run if not generator function)
@@ -1597,7 +1849,8 @@ class MainWindow(Frame):
                 try:
                     sc_widget = self.entries[("Generator Function", "Sweep Ctrl")]
                     # Ensure single binding
-                    sc_widget.bind("<<ComboboxSelected>>", lambda e: self._update_sweep_ctrl_visibility())
+                    # add='+' so existing modification watcher from _create_combo remains
+                    sc_widget.bind("<<ComboboxSelected>>", lambda e: self._update_sweep_ctrl_visibility(), add='+')
                     # Apply initial visibility
                     self._update_sweep_ctrl_visibility()
                 except Exception:
@@ -1627,8 +1880,86 @@ class MainWindow(Frame):
             messagebox.showerror("Settings Error", f"Could not load settings.json: {e}")
         # After (re)loading settings, force user to Apply before sweep
         if hasattr(self, 'start_sweep_btn'):
+            # Attach modification watchers so ANY change in any panel reverts preset to default
+            try:
+                self._attach_modification_watchers()
+            except Exception:
+                pass
             self._settings_applied = False
             self._refresh_start_sweep_state()
+
+    def _mark_modified(self, *args):
+        """Handle any user modification.
+
+        Actions:
+          - Revert preset label to DEFAULT_PRESET_NAME if a different preset was active (signals divergence).
+          - Mark settings as not applied (_settings_applied = False).
+          - Disable Start Sweep until user clicks 'Apply Settings' again.
+        """
+        try:
+            # Revert preset name if diverged
+            if self._current_preset_name != DEFAULT_PRESET_NAME:
+                self._current_preset_name = DEFAULT_PRESET_NAME
+                if hasattr(self, 'preset_label'):
+                    try:
+                        self.preset_label.config(text=f"Preset: {self._current_preset_name}")
+                    except Exception:
+                        pass
+            # Invalidate applied settings and disable sweep button
+            if getattr(self, '_settings_applied', False):
+                self._settings_applied = False
+                if hasattr(self, 'start_sweep_btn'):
+                    try:
+                        self.start_sweep_btn.config(state='disabled')
+                    except Exception:
+                        pass
+            # Ensure gating reflects latest state
+            try:
+                self._refresh_start_sweep_state()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _attach_modification_watchers(self):
+        """Attach change listeners to all interactive widgets across all panels.
+
+        Covers:
+          - ttk.Combobox (both those stored directly and inside tuples)
+          - Entry widgets (direct or inside tuples)
+          - tk.StringVar / tk.BooleanVar variables (checkboxes, radio groups)
+        """
+        import tkinter as tk
+        # Prevent duplicate attachment within same settings load (optional)
+        if getattr(self, '_mod_watchers_attached', False):
+            return
+        for key, widget in list(self.entries.items()):
+            # Unpack composite tuples like (Entry, Combobox) or (Combobox, filter_keys, filter_values)
+            candidates = []
+            if isinstance(widget, tuple):
+                # First pass: include widget-like elements
+                for part in widget:
+                    candidates.append(part)
+            else:
+                candidates.append(widget)
+            for w in candidates:
+                try:
+                    # Skip non-widget simple data (e.g., list, str)
+                    if isinstance(w, ttk.Combobox):
+                        w.bind('<<ComboboxSelected>>', lambda e, self=self: self._mark_modified(), add='+')
+                    elif isinstance(w, Entry):
+                        w.bind('<KeyRelease>', lambda e, self=self: self._mark_modified(), add='+')
+                    elif hasattr(w, 'bind') and w.__class__.__name__ == 'Entry':  # fallback generic Entry subclass
+                        w.bind('<KeyRelease>', lambda e, self=self: self._mark_modified(), add='+')
+                except Exception:
+                    continue
+            # Variable traces (checkboxes / radiobuttons) stored as tk.StringVar / tk.BooleanVar
+            try:
+                if isinstance(widget, (tk.StringVar, tk.BooleanVar)):
+                    widget.trace_add('write', lambda *a, self=self: self._mark_modified())
+            except Exception:
+                pass
+        self._mod_watchers_attached = True
 
     def save_settings(self):
         try:
@@ -1658,7 +1989,7 @@ class MainWindow(Frame):
             try:
                 status_callback(f"🔌 Trying saved UPV address: {visa_address}")
                 upv = rm.open_resource(visa_address)
-                upv.timeout = 5000
+                upv.timeout = 3000
                 idn = upv.query("*IDN?").strip()
                 status_callback(f"✅ Connected to: {idn}")
                 self.upv = upv
@@ -2058,6 +2389,17 @@ class MainWindow(Frame):
             else:
                 settings["Generator Config"]["Impedance"] = "R5"
 
+            # --- Prompt user for sweep mode (continuous vs single) and persist to settings.json ---
+            try:
+                mode_continuous = messagebox.askyesno(
+                    "Sweep Mode",
+                    "Apply settings as continuous sweep?\nYes = Continuous\nNo = Single"
+                )
+                settings["INIT:CONT"] = "ON" if mode_continuous else "OFF"
+            except Exception:
+                # If dialog fails for any reason, default to existing value or OFF
+                settings.setdefault("INIT:CONT", "OFF")
+
             with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
                 json.dump(settings, f, indent=2, ensure_ascii=False)
 
@@ -2103,63 +2445,124 @@ class MainWindow(Frame):
             self.update_status(msg)
 
         try:
-            continuous = self._is_continuous_sweep_enabled()
-            self.upv.timeout = 30000  # Increase timeout to 30 seconds
+            continuous = False
+            try:
+                continuous = self._is_continuous_sweep_enabled()
+            except Exception:
+                pass
+            try:
+                self.upv.timeout = 30000
+            except Exception:
+                pass
             status_callback("⚙️ Preparing for {} sweep...".format("continuous" if continuous else "single"))
-            self.upv.write("OUTP ON")
-            # Honor preset override (continuous has higher priority if specified in JSON)
-            if continuous:
-                self.upv.write("INIT:CONT ON")
-            else:
-                self.upv.write("INIT:CONT OFF")
-
+            try:
+                self.upv.write("OUTP ON")
+            except Exception:
+                pass
+            try:
+                self.upv.write("INIT:CONT ON" if continuous else "INIT:CONT OFF")
+            except Exception:
+                pass
             status_callback("▶️ Starting {} sweep...".format("continuous" if continuous else "single"))
-            self.upv.write("INIT")
-
+            try:
+                self.upv.write("INIT")
+            except Exception:
+                pass
             if continuous:
-                # In continuous mode we don't wait for *OPC? completion; user can stop externally
                 status_callback("🔄 Continuous sweep running (preset override).")
-                messagebox.showinfo("Sweep", "Continuous sweep started (from preset).")
+                try:
+                    messagebox.showinfo("Sweep", "Continuous sweep started (from preset).")
+                except Exception:
+                    pass
                 self._continuous_active = True
-                # Toggle buttons
                 if hasattr(self, 'start_sweep_btn'):
                     self.start_sweep_btn.config(state="disabled")
                 if hasattr(self, 'stop_sweep_btn'):
                     self.stop_sweep_btn.config(state="normal")
+                self.after(600, lambda: self._init_live_sweep_display())
             else:
-                status_callback("⏳ Waiting for sweep to complete test...")
-                self.upv.timeout = 20000
-                self.upv.query("*OPC?")
-                status_callback("✔️ Sweep completed successfully.")
-                messagebox.showinfo("Sweep", "Single sweep started and completed!")
-                self.fetch_data()
-                # Ensure stop button remains disabled after single sweep
-                self._continuous_active = False
-                if hasattr(self, 'stop_sweep_btn'):
-                    self.stop_sweep_btn.config(state="disabled")
+                try:
+                    self.upv.write("*CLS")
+                    self.upv.write("*OPC")
+                except Exception:
+                    pass
+                status_callback("⏳ Single sweep running (live)...")
+                self._single_sweep_in_progress = True
+                self._single_sweep_done = False
                 if hasattr(self, 'start_sweep_btn'):
-                    # Disable start until user explicitly re-applies settings
                     try:
-                        self._settings_applied = False
                         self.start_sweep_btn.config(state="disabled")
-                        # Inform user they must re-apply settings for next sweep
-                        self.update_status("Sweep completed. Apply Settings again to enable start.", color="green")
                     except Exception:
                         pass
-                    # Refresh gating logic (in case connection state changes later)
-                    try:
-                        self._refresh_start_sweep_state()
-                    except Exception:
-                        pass
+                self.after(80, self._init_live_sweep_display)
+                self._single_prev_point_count = 0
+            try:
+                self._refresh_start_sweep_state()
+            except Exception:
+                pass
         except Exception as e:
             status_callback(f"❌ Failed to start sweep: {e}")
-            messagebox.showerror("Sweep Error", f"Failed to start sweep: {e}")
-            # Attempt to restore button states safely
+            try:
+                messagebox.showerror("Sweep Error", f"Failed to start sweep: {e}")
+            except Exception:
+                pass
             self._continuous_active = False
             if hasattr(self, 'stop_sweep_btn'):
                 self.stop_sweep_btn.config(state="disabled")
             if hasattr(self, 'start_sweep_btn'):
                 self.start_sweep_btn.config(state="normal")
+
+    def _on_single_sweep_complete(self, success: bool):
+        if getattr(self, '_single_sweep_done', False):
+            return
+        self._single_sweep_done = True
+        self._single_sweep_in_progress = False
+        # Stop acquisition thread for single sweep (prevents late queue pushes during dialogs)
+        try:
+            if not self._continuous_active:
+                self._stop_acquisition_thread()
+                self._live_consumer_started = False
+        except Exception:
+            pass
+        # Update status first
+        if success:
+            self.update_status("✔️ Single sweep completed.")
+        else:
+            self.update_status("⚠️ Single sweep ended (timeout/abort).", color="orange")
+        # One last gentle axis freeze (skip full polling to reduce race risk)
+        try:
+            if hasattr(self, '_live_ax') and hasattr(self, '_live_line') and self._live_line is not None:
+                xdata = list(getattr(self._live_line, 'get_xdata', lambda: [])())
+                ydata = list(getattr(self._live_line, 'get_ydata', lambda: [])())
+                if xdata and ydata:
+                    self._apply_fixed_freq_and_auto_level(self._live_ax, xdata, ydata)
+                    if hasattr(self, '_live_canvas'):
+                        self._live_canvas.draw_idle()
+        except Exception:
+            pass
+        # Show popup only if root still alive
+        try:
+            if self.winfo_exists():
+                messagebox.showinfo("Sweep", "Single sweep completed!" if success else "Single sweep ended (timeout/abort)")
+        except Exception:
+            pass
+        # Offer export only after popup (user acknowledgement) to avoid stacked dialogs
+        if success:
+            try:
+                self.fetch_data()
+            except Exception:
+                pass
+        try:
+            self._settings_applied = False
+            if hasattr(self, 'start_sweep_btn'):
+                self.start_sweep_btn.config(state="disabled")
+            self.update_status("Sweep finished. Apply Settings again to enable start.", color="green")
+        except Exception:
+            pass
+        try:
+            self._refresh_start_sweep_state()
+        except Exception:
+            pass
 
     def stop_continuous_sweep(self, silent: bool = False):
         """Stop an active continuous sweep and (optionally) fetch current data.
@@ -2205,6 +2608,11 @@ class MainWindow(Frame):
                 except Exception:
                     pass
                 self._refresh_start_sweep_state()
+            # Terminate any live update loop
+            try:
+                self._live_sweep_running = False
+            except Exception:
+                pass
             self.update_status("✅ Continuous sweep stopped.")
             if not silent:
                 # No automatic fetch or dialog per user request; simply end silently with status label update
@@ -2214,37 +2622,89 @@ class MainWindow(Frame):
             if not silent:
                 messagebox.showerror("Sweep Error", f"Failed to stop continuous sweep: {e}")
 
-    def snapshot_upv(self):
-        """Capture current UPV settings and save them to a JSON snapshot file.
+    def connect_to_upv(self):
+        """Connect to the UPV asynchronously to avoid GUI freeze / flicker."""
+        if self._connecting:
+            return  # already in progress
+        self._connecting = True
+        self._scan_anim_phase = 0
+        try:
+            if hasattr(self, 'connect_btn'):
+                self.connect_btn.config(state='disabled')
+        except Exception:
+            pass
+        self.upv = None
+        self._anim_scan_tick()
 
-        Prompts user for a destination path; if cancelled, does nothing.
-        Utilises upv_readback.save_settings_snapshot to produce a JSON that
-        mirrors the grouped settings structure (code values)."""
+        def worker():
+            rm = None
+            try:
+                rm = pyvisa.ResourceManager()
+                visa_address = load_config()
+                if visa_address:
+                    for attempt in range(2):
+                        try:
+                            self._thread_safe_status(f"🔌 Trying saved address ({attempt+1}/2)...")
+                            inst = rm.open_resource(visa_address)
+                            inst.timeout = 5000
+                            idn = inst.query("*IDN?").strip()
+                            self.upv = inst
+                            self._thread_safe_status(f"✅ Connected: {idn}")
+                            break
+                        except Exception as e:  # retry next
+                            if attempt == 1:
+                                visa_address = None
+                if not self.upv:
+                    # perform scan
+                    def cb(msg):
+                        # throttle noisy messages
+                        if 'Found UPV' in msg or 'not found' in msg:
+                            self._thread_safe_status(msg)
+                    visa_address = find_upv_ip(status_callback=cb)
+                    if not visa_address:
+                        self._thread_safe_status("❌ UPV not found. Check cables/power.", color="red")
+                        return
+                    try:
+                        inst = rm.open_resource(visa_address)
+                        inst.timeout = 5000
+                        idn = inst.query("*IDN?").strip()
+                        self.upv = inst
+                        self._thread_safe_status(f"✅ Connected: {idn}")
+                    except Exception as e:
+                        self._thread_safe_status(f"❌ Failed to connect: {e}", color="red")
+                        return
+            finally:
+                self._connecting = False
+                try:
+                    if hasattr(self, 'connect_btn'):
+                        self.after(0, lambda: self.connect_btn.config(state='normal'))
+                except Exception:
+                    pass
+                # Refresh sweep start gating once connection done
+                self.after(0, self._refresh_start_sweep_state)
+
+        threading.Thread(target=worker, daemon=True).start()
+    def snapshot_upv(self):
+        """Capture current UPV settings and save them to a JSON snapshot file (async-safe)."""
         if self.upv is None:
             messagebox.showerror("Snapshot Error", "UPV is not connected.")
             return
         try:
             from upv.upv_readback import save_settings_snapshot
-            import json
-            # Ask user where to save snapshot
             dest = filedialog.asksaveasfilename(
                 defaultextension=".json",
                 filetypes=[("JSON files", "*.json")],
                 title="Save UPV Settings Snapshot As",
-                initialfile=".json"
+                initialfile="snapshot.json"
             )
             if not dest:
                 self.update_status("Snapshot cancelled.", color="orange")
                 return
-
-            # Prompt user for sweep mode
             mode_continuous = messagebox.askyesno(
                 "Sweep Mode",
-                "Save snapshot as continuous sweep?\nYes = Continuous (INIT:CONT ON)\nNo = Single (INIT:CONT OFF)"
+                "Save snapshot as continuous sweep?\nYes = Continuous\nNo = Single"
             )
-
             out_path = save_settings_snapshot(self.upv, Path(dest))
-            # Inject INIT:CONT selection into snapshot JSON
             try:
                 with open(out_path, 'r', encoding='utf-8') as f:
                     snap_data = json.load(f)
@@ -2261,6 +2721,313 @@ class MainWindow(Frame):
         except Exception as e:
             self.update_status("Snapshot failed", color="red")
             messagebox.showerror("Snapshot Error", f"Failed to create snapshot: {e}")
+
+    def show_sweep_display(self):
+        """Send DISPlay:SWEep:SHOW to UPV and embed current sweep trace in a popup window.
+
+        Steps:
+          1. Ensure connection.
+          2. Issue SCPI to force instrument display.
+          3. Query trace data (frequency & magnitude).
+          4. Resolve Y units (SENS:USER > SENS:UNIT > SENS1:UNIT > dBV).
+          5. Render matplotlib plot inside a transient Toplevel without blocking main UI.
+        """
+        if self.upv is None:
+            messagebox.showwarning("UPV", "Not connected to UPV.")
+            return
+        try:
+            # Tell instrument to show its sweep display (best-effort)
+            try:
+                self.upv.write("DISPlay:SWEep:SHOW")
+            except Exception:
+                pass  # Non-fatal if instrument firmware variant differs
+
+            # Fetch trace data directly
+            try:
+                x_raw = self.upv.query("TRAC:SWE1:LOAD:AX?")
+                y_raw = self.upv.query("TRAC:SWE1:LOAD:AY?")
+            except Exception as e:
+                messagebox.showerror("Trace Error", f"Failed to read sweep trace: {e}")
+                return
+            import numpy as _np
+            try:
+                x_vals = _np.fromstring(x_raw, sep=',')
+                y_vals = _np.fromstring(y_raw, sep=',')
+            except Exception as e:
+                messagebox.showerror("Parse Error", f"Failed to parse trace data: {e}")
+                return
+            if len(x_vals) == 0 or len(x_vals) != len(y_vals):
+                messagebox.showerror("Trace Error", "Empty or mismatched trace data.")
+                return
+
+            # Unit resolution (reuse logic priorities)
+            y_unit_display = 'dBV'
+            try:
+                import json as _json
+                if Path(SETTINGS_FILE).exists():
+                    with open(SETTINGS_FILE, 'r', encoding='utf-8') as _sf:
+                        _settings_data = _json.load(_sf)
+                    user_unit_raw = _settings_data.get('SENS:USER')
+                    std_unit_raw = _settings_data.get('SENS:UNIT') or _settings_data.get('SENS1:UNIT')
+                    def _sanitize(s: str) -> str:
+                        if not isinstance(s, str):
+                            return ''
+                        s2 = s.strip().strip('"').strip("'")
+                        low = s2.lower()
+                        if low.startswith('db'):
+                            rest = s2[2:].lstrip()
+                            toks = [t.upper() if t.lower() == 'spl' else t for t in rest.split()]
+                            return 'dB ' + ' '.join(toks) if toks else 'dB'
+                        return s2
+                    if isinstance(user_unit_raw, str) and user_unit_raw.strip():
+                        cand = _sanitize(user_unit_raw)
+                        if cand:
+                            y_unit_display = cand
+                        else:
+                            if isinstance(std_unit_raw, str):
+                                yu = std_unit_raw.strip().upper()
+                                unit_map = {'DBR':'dBr','DBV':'dBV','DBU':'dBu','DBM':'dBm','V':'V','MV':'mV','UV':'μV','UVR':'μV','UV RMS':'μV','UVRMS':'μV','PCT':'%','%':'%'}
+                                y_unit_display = unit_map.get(yu, std_unit_raw.strip())
+                    elif isinstance(std_unit_raw, str):
+                        yu = std_unit_raw.strip().upper()
+                        unit_map = {'DBR':'dBr','DBV':'dBV','DBU':'dBu','DBM':'dBm','V':'V','MV':'mV','UV':'μV','UVR':'μV','UV RMS':'μV','UVRMS':'μV','PCT':'%','%':'%'}
+                        y_unit_display = unit_map.get(yu, std_unit_raw.strip())
+            except Exception:
+                pass
+
+            # Build / reuse popup window
+            import tkinter as _tk
+            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+            from matplotlib.figure import Figure
+
+            # Destroy previous plot window if still open
+            if hasattr(self, '_sweep_plot_win') and self._sweep_plot_win is not None:
+                try:
+                    self._sweep_plot_win.destroy()
+                except Exception:
+                    pass
+            self._sweep_plot_win = _tk.Toplevel(self.master)
+            self._sweep_plot_win.title("Sweep Display")
+            self._sweep_plot_win.geometry("700x450")
+            # Figure
+            fig = Figure(figsize=(7, 4.2), dpi=100)
+            ax = fig.add_subplot(111)
+            ax.semilogx(x_vals, y_vals)
+            ax.set_xlabel('Frequency (Hz)')
+            ax.set_ylabel(f'Level ({y_unit_display})')
+            ax.set_title('Sweep Trace')
+            ax.grid(True, which='both', ls='--', linewidth=0.5)
+            # Force refresh of axis limits for explicit display request
+            self._force_freq_limit_refresh = True
+            self._apply_fixed_freq_and_auto_level(ax, x_vals, y_vals)
+            fig.tight_layout()
+
+            canvas = FigureCanvasTkAgg(fig, master=self._sweep_plot_win)
+            canvas.draw()
+            canvas.get_tk_widget().pack(fill='both', expand=True)
+
+            self.update_status("Sweep display updated.")
+        except Exception as e:
+            messagebox.showerror("Display Error", f"Failed to show sweep: {e}")
+            self.update_status("Failed to show sweep", color="red")
+
+    # ---------------- Live Sweep Display (Auto Refresh) -----------------
+    def _init_live_sweep_display(self):
+        """Setup (or reuse) live sweep window and start background acquisition & GUI consumer."""
+        if self.upv is None:
+            return
+        import tkinter as _tk
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+        from matplotlib.figure import Figure
+        create_new = False
+        if not hasattr(self, '_sweep_plot_win') or self._sweep_plot_win is None or not self._sweep_plot_win.winfo_exists():
+            create_new = True
+        if create_new:
+            try:
+                self._sweep_plot_win = _tk.Toplevel(self.master)
+                self._sweep_plot_win.title("Live Sweep")
+                self._sweep_plot_win.geometry("700x450")
+                fig = Figure(figsize=(7, 4.2), dpi=100)
+                ax = fig.add_subplot(111)
+                ax.set_xscale('log')
+                ax.set_xlabel('Frequency (Hz)')
+                ax.set_ylabel(f'Level ({self._resolve_y_unit_from_settings()})')
+                ax.set_title('Live Sweep Trace')
+                ax.grid(True, which='both', ls='--', linewidth=0.5)
+                try:
+                    ax.set_xlim(100, 12000)
+                except Exception:
+                    pass
+                fig.tight_layout()
+                canvas = FigureCanvasTkAgg(fig, master=self._sweep_plot_win)
+                canvas.draw()
+                canvas.get_tk_widget().pack(fill='both', expand=True)
+                self._live_fig = fig
+                self._live_ax = ax
+                self._live_canvas = canvas
+                try:
+                    (self._live_line,) = ax.semilogx([], [], color='C0')
+                except Exception:
+                    self._live_line = None
+                def _on_close():
+                    try:
+                        self._live_consumer_started = False
+                        self._stop_acquisition_thread()
+                    except Exception:
+                        pass
+                    try:
+                        self._sweep_plot_win.destroy()
+                    except Exception:
+                        pass
+                self._sweep_plot_win.protocol("WM_DELETE_WINDOW", _on_close)
+            except Exception:
+                return
+        # Start acquisition thread if needed
+        if self._acq_thread is None or not self._acq_thread.is_alive():
+            self._start_acquisition_thread()
+        # Start consumer loop once
+        if not self._live_consumer_started:
+            self._live_consumer_started = True
+            self.after(120, self._poll_live_sweep)
+
+    def _poll_live_sweep(self):
+        """GUI consumer: apply latest queued data to plot (non-blocking)."""
+        try:
+            single_active = getattr(self, '_single_sweep_in_progress', False)
+            if self.upv is None or (not self._continuous_active and not single_active):
+                # Still reschedule to detect restart
+                self.after(300, self._poll_live_sweep)
+                return
+            latest = None
+            while True:
+                try:
+                    latest = self._data_queue.get_nowait()
+                except queue.Empty:
+                    break
+            if latest and hasattr(self, '_live_ax'):
+                x_vals, y_vals = latest
+                unit_display = self._resolve_y_unit_from_settings()
+                ax = self._live_ax
+                try:
+                    if getattr(self, '_live_line', None) is not None:
+                        self._live_line.set_data(x_vals, y_vals)
+                    else:
+                        (self._live_line,) = ax.semilogx(x_vals, y_vals, color='C0')
+                    ax.set_ylabel(f'Level ({unit_display})')
+                    self._apply_fixed_freq_and_auto_level(ax, x_vals, y_vals)
+                except Exception:
+                    pass
+                try:
+                    self._live_canvas.draw_idle()
+                except Exception:
+                    pass
+        finally:
+            if hasattr(self, '_sweep_plot_win') and self._sweep_plot_win and self._sweep_plot_win.winfo_exists() and self._live_consumer_started:
+                self.after(120, self._poll_live_sweep)
+
+    # ---------------- Acquisition Thread Management -----------------
+    def _start_acquisition_thread(self):
+        self._stop_acquisition_thread()
+        self._acq_stop_event.clear()
+        t = threading.Thread(target=self._acquisition_loop, name="UPVAcq", daemon=True)
+        self._acq_thread = t
+        t.start()
+
+    def _stop_acquisition_thread(self):
+        if self._acq_thread and self._acq_thread.is_alive():
+            self._acq_stop_event.set()
+            try:
+                self._acq_thread.join(timeout=1.2)
+            except Exception:
+                pass
+        self._acq_thread = None
+
+    def _acquisition_loop(self):
+        prev_point_count = None
+        idle_cycles = 0
+        while not self._acq_stop_event.is_set():
+            active = (self._continuous_active or getattr(self, '_single_sweep_in_progress', False)) and self.upv is not None
+            if not active:
+                # If single sweep finished and not continuous, we can slow down / exit thread if window closed
+                if not self._continuous_active and not getattr(self, '_single_sweep_in_progress', False):
+                    if not hasattr(self, '_sweep_plot_win') or not (self._sweep_plot_win and self._sweep_plot_win.winfo_exists()):
+                        break  # no need to keep thread alive
+                time.sleep(0.25)
+                continue
+            x_raw = self._safe_query("TRAC:SWE1:LOAD:AX?", timeout_ms=2500)
+            y_raw = self._safe_query("TRAC:SWE1:LOAD:AY?", timeout_ms=2500)
+            if x_raw is None or y_raw is None:
+                self._acq_fail_count += 1
+                if self._acq_fail_count == 5:
+                    self._thread_safe_status("Comm timeouts (5) – continuing", color="red")
+                time.sleep(0.35)
+                continue
+            self._acq_fail_count = 0
+            try:
+                x_vals = [float(v) for v in x_raw.split(',') if v.strip()]
+                y_vals = [float(v) for v in y_raw.split(',') if v.strip()]
+            except Exception:
+                time.sleep(0.18)
+                continue
+            if len(x_vals) != len(y_vals):
+                m = min(len(x_vals), len(y_vals))
+                x_vals = x_vals[:m]
+                y_vals = y_vals[:m]
+            if x_vals:
+                if self._data_queue.full():
+                    try:
+                        self._data_queue.get_nowait()
+                    except Exception:
+                        pass
+                try:
+                    self._data_queue.put_nowait((x_vals, y_vals))
+                except Exception:
+                    pass
+            pc = len(x_vals)
+            if prev_point_count is not None and pc == prev_point_count:
+                idle_cycles += 1
+            else:
+                idle_cycles = 0
+            prev_point_count = pc
+            if idle_cycles < 3:
+                time.sleep(0.12)
+            elif idle_cycles < 10:
+                time.sleep(0.22)
+            else:
+                time.sleep(0.4)
+            # Single sweep completion detection via ESR bit 0
+            if getattr(self, '_single_sweep_in_progress', False) and not self._continuous_active:
+                esr = self._safe_query("*ESR?", timeout_ms=600)
+                if esr is not None:
+                    try:
+                        esr_val = int(float(esr))
+                    except Exception:
+                        esr_val = 0
+                    if esr_val & 0x01:
+                        try:
+                            self._thread_safe_status("Single sweep complete", color="green")
+                        except Exception:
+                            pass
+                        try:
+                            self.after(0, lambda: self._on_single_sweep_complete(True))
+                        except Exception:
+                            pass
+                        continue
+                # If acquisition seems stalled for extended time (idle_cycles high) mark as timeout
+                if idle_cycles > 200:  # ~ >60s of no change at slowest loop
+                    try:
+                        self.after(0, lambda: self._on_single_sweep_complete(False))
+                    except Exception:
+                        pass
+                    continue
+        # exiting
+
+    def destroy(self):  # override
+        try:
+            self._stop_acquisition_thread()
+        except Exception:
+            pass
+        return super().destroy()
 
     def _is_continuous_sweep_enabled(self):
         """Determine if preset/settings JSON requests continuous sweep (INIT:CONT ON).
@@ -2696,7 +3463,7 @@ class MainWindow(Frame):
 
         mode_continuous = messagebox.askyesno(
             "Sweep Mode",
-            "Save preset as continuous sweep?\nYes = Continuous (INIT:CONT ON)\nNo = Single (INIT:CONT OFF)"
+            "Save preset as continuous sweep?\nYes = Continuous\nNo = Single"
         )
 
         # Read current settings from settings.json
@@ -2739,17 +3506,19 @@ class MainWindow(Frame):
 
             # Reload the GUI to reflect the loaded preset
             self.load_settings()
-            # Record preset base name for future exports (WorkingTitle / CurveDataName)
+            # Record preset base name for future exports (WorkingTitle / CurveDataName), but allow default to override
             try:
-                self._current_preset_name = _Path(preset_path).stem
-            except Exception:
-                self._current_preset_name = None
-            # Update preset label display
-            try:
-                if self._current_preset_name:
-                    self.preset_label.config(text=f"Preset: {self._current_preset_name}")
+                stem = _Path(preset_path).stem
+                if stem.lower() == DEFAULT_PRESET_NAME.lower():
+                    self._current_preset_name = DEFAULT_PRESET_NAME
                 else:
-                    self.preset_label.config(text="Preset: (none)")
+                    self._current_preset_name = stem
+            except Exception:
+                self._current_preset_name = DEFAULT_PRESET_NAME
+            # Update preset label display (always show something; default if None)
+            try:
+                display_name = self._current_preset_name or DEFAULT_PRESET_NAME
+                self.preset_label.config(text=f"Preset: {display_name}")
             except Exception:
                 pass
             messagebox.showinfo("Preset Loaded", f"Preset loaded from {preset_path}")

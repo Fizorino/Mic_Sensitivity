@@ -254,33 +254,78 @@ def fetch_and_plot_trace(upv, export_path="sweep_trace.hxml", working_title=None
             curve_data_name_raw = "sweep_trace.hxml"
         curve_data_name_xml = _xml_escape(curve_data_name_raw)
 
-        # Determine Y-axis / magnitude units from current settings (SENS:UNIT) if available
-        # Fallback to dBV if not specified. Accept common variants.
+        # Determine Y-axis / magnitude units from current settings.
+        # Priority:
+        #   1. SENS:USER (user-defined textual unit) -> sanitized (strip quotes)
+        #   2. SENS:UNIT (standard unit selection)
+        #   3. SENS1:UNIT (legacy / alternative key)
+        # Fallback: dBV
         try:
-            y_unit_raw = None
+            y_unit_display = 'dBV'
             if Path(SETTINGS_FILE).exists():
                 with open(SETTINGS_FILE, 'r', encoding='utf-8') as sf:
                     settings_data = json.load(sf)
-                    y_unit_raw = settings_data.get('SENS:UNIT') or settings_data.get('SENS1:UNIT')
-            if isinstance(y_unit_raw, str):
-                yu = y_unit_raw.strip().upper()
-                unit_map = {
-                    'DBR': 'dBr',
-                    'DBV': 'dBV',
-                    'DBU': 'dBu',
-                    'DBM': 'dBm',
-                    'V': 'V',
-                    'MV': 'mV',
-                    'UV': 'μV',
-                    'UVR': 'μV',
-                    'UV RMS': 'μV',
-                    'UVRMS': 'μV',
-                    'PCT': '%',
-                    '%': '%'
-                }
-                y_unit_display = unit_map.get(yu, y_unit_raw.strip())
-            else:
-                y_unit_display = 'dBV'
+                user_unit_raw = settings_data.get('SENS:USER')
+                std_unit_raw = settings_data.get('SENS:UNIT') or settings_data.get('SENS1:UNIT')
+
+                def _sanitize_user_unit(s: str) -> str:
+                    if not isinstance(s, str):
+                        return ''
+                    # Strip surrounding quotes (single or double)
+                    s2 = s.strip().strip('"').strip('\'')
+                    # Common normalization: 'db spl' -> 'dB SPL'
+                    low = s2.lower()
+                    if low.startswith('db'):
+                        # split after 'db'
+                        rest = s2[2:].lstrip()
+                        # Uppercase SPL token if present
+                        tokens = rest.split()
+                        tokens = [t.upper() if t.lower() == 'spl' else t for t in tokens]
+                        if tokens:
+                            return 'dB ' + ' '.join(tokens)
+                        return 'dB'
+                    return s2
+
+                if isinstance(user_unit_raw, str) and user_unit_raw.strip():
+                    candidate = _sanitize_user_unit(user_unit_raw)
+                    if candidate:
+                        y_unit_display = candidate
+                    else:
+                        # fall back to std unit if user unit empty after sanitize
+                        if isinstance(std_unit_raw, str):
+                            yu = std_unit_raw.strip().upper()
+                            unit_map = {
+                                'DBR': 'dBr',
+                                'DBV': 'dBV',
+                                'DBU': 'dBu',
+                                'DBM': 'dBm',
+                                'V': 'V',
+                                'MV': 'mV',
+                                'UV': 'μV',
+                                'UVR': 'μV',
+                                'UV RMS': 'μV',
+                                'UVRMS': 'μV',
+                                'PCT': '%',
+                                '%': '%'
+                            }
+                            y_unit_display = unit_map.get(yu, std_unit_raw.strip())
+                elif isinstance(std_unit_raw, str):
+                    yu = std_unit_raw.strip().upper()
+                    unit_map = {
+                        'DBR': 'dBr',
+                        'DBV': 'dBV',
+                        'DBU': 'dBu',
+                        'DBM': 'dBm',
+                        'V': 'V',
+                        'MV': 'mV',
+                        'UV': 'μV',
+                        'UVR': 'μV',
+                        'UV RMS': 'μV',
+                        'UVRMS': 'μV',
+                        'PCT': '%',
+                        '%': '%'
+                    }
+                    y_unit_display = unit_map.get(yu, std_unit_raw.strip())
         except Exception:
             y_unit_display = 'dBV'
 

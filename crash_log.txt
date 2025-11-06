@@ -1,0 +1,9 @@
+
+==== 2025-10-10T10:05:47.540724 ====Traceback (most recent call last):
+  File "c:\Users\AU001A0W\OneDrive - WSA\Documents\Mic_Sensitivity\mic-sensitivity-gui\src\main.py", line 44, in <module>
+    main()
+  File "c:\Users\AU001A0W\OneDrive - WSA\Documents\Mic_Sensitivity\mic-sensitivity-gui\src\main.py", line 41, in main
+    root.mainloop()
+  File "C:\Python310\lib\tkinter\__init__.py", line 1458, in mainloop
+    self.tk.mainloop(n)
+KeyboardInterrupt
