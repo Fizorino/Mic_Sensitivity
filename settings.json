@@ -1,4 +1,7 @@
 {
+  "SENS:UNIT": "DBR",
+  "SENS:UNA": "ON",
+  "DISP:SWE1:A:UNIT:TRAC": "ON",
   "Generator Config": {
     "Instrument Generator": "ANLG",
     "Channel Generator": "CH1",
@@ -8,26 +11,26 @@
     "Bandwidth Generator": "B22",
     "Volt Range (Auto/Fix)": "AUTO",
     "Max Voltage": "10 V",
-    "Ref Voltage": "-91.5999984741 dBV",
+    "Ref Voltage": "-91.15 dBV",
     "Ref Frequency": "1000 Hz"
   },
   "Generator Function": {
     "Function Generator": "SIN",
     "Low Dist": "OFF",
     "Sweep Ctrl": "ASW",
-    "Frequency": "100 Hz",
     "Next Step": "ASYN",
     "X Axis": "FREQ",
     "Z Axis": "OFF",
     "Spacing": "LOGP",
     "Start": "100 Hz",
-    "Stop": "10000 Hz",
-    "Points": "152",
+    "Stop": "20000 Hz",
+    "Points": "101",
     "Halt": "MUTE",
-    "Voltage": "50 dBr",
+    "Voltage": "94 dBr",
     "Filter": "OFF",
     "Equalizer": "ON",
-    "DC Offset": "OFF"
+    "DC Offset": "OFF",
+    "Frequency": "1000 Hz"
   },
   "Analyzer Config": {
     "Instrument Analyzer": "ANLG",
@@ -48,15 +51,14 @@
     "Function Analyzer": "RMS",
     "S/N Sequence": "OFF",
     "Meas Time": "GENT",
-    "Sweep Ctrl Analyzer Config": "OFF",
     "Notch(Gain)": "OFF",
     "Filter1": "OFF",
     "Filter2": "OFF",
     "Filter3": "OFF",
     "Fnct Settling": "EXP",
     "Samples": "3",
-    "Tolerance": "0.10000000149 %",
-    "Resolution": "0.10000050813 dBV",
+    "Tolerance": "0.1 %",
+    "Resolution": "0.1 dBV",
     "Timeout": "10 s",
     "Bargraph": "OFF",
     "POST FFT": "OFF",
@@ -65,6 +67,5 @@
     "Input Monitor": "OFF",
     "Freq/Phase": "OFF",
     "Waveform": "OFF"
-  },
-  "INIT:CONT": "OFF"
+  }
 }

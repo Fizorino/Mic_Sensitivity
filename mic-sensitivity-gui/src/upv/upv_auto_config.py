@@ -223,17 +223,19 @@ def fetch_and_plot_trace(upv, export_path="sweep_trace.hxml", working_title=None
 
         now = datetime.datetime.now().strftime("%d-%b-%Y %H:%M:%S")
 
-        # Derive dynamic dataset WorkingTitle (preset focused):
-        # Priority: explicit working_title (preset stem) > export file stem > default fallback
+        # Derive CurveDataName (preset focused) and dataset WorkingTitle constant per new unified format.
+        # WorkingTitle: always literal "workingTitle" (matches combined export example)
+        working_title_raw = "workingTitle"
+        # CurveDataName priority: explicit working_title argument (preset stem) > export file stem > fallback
         if isinstance(working_title, str) and working_title.strip():
-            working_title_raw = working_title.strip()
+            curve_data_name_source = working_title.strip()
         else:
             try:
-                working_title_raw = Path(export_path).stem if export_path else "Mic Sensitivity"
-                if not working_title_raw:
-                    working_title_raw = "Mic Sensitivity"
+                curve_data_name_source = Path(export_path).stem if export_path else "measurement"
+                if not curve_data_name_source:
+                    curve_data_name_source = "measurement"
             except Exception:
-                working_title_raw = "Mic Sensitivity"
+                curve_data_name_source = "measurement"
 
         # Simple XML escape for attribute context
         def _xml_escape(s: str) -> str:
@@ -245,14 +247,7 @@ def fetch_and_plot_trace(upv, export_path="sweep_trace.hxml", working_title=None
 
         working_title_xml = _xml_escape(working_title_raw)
 
-        # CurveDataName must always reflect exactly the user-chosen export file name (file name with extension)
-        try:
-            curve_data_name_raw = Path(export_path).name if export_path else "sweep_trace.hxml"
-            if not curve_data_name_raw:
-                curve_data_name_raw = "sweep_trace.hxml"
-        except Exception:
-            curve_data_name_raw = "sweep_trace.hxml"
-        curve_data_name_xml = _xml_escape(curve_data_name_raw)
+        curve_data_name_xml = _xml_escape(curve_data_name_source)
 
         # Determine Y-axis / magnitude units from current settings.
         # Priority:
@@ -335,32 +330,30 @@ def fetch_and_plot_trace(upv, export_path="sweep_trace.hxml", working_title=None
         with open(export_path, "w", encoding="utf-8") as f:
             f.write('<?xml version="1.0" encoding="utf-8"?>\n')
             f.write("<hxml>\n")
-            f.write("  <head>\n")
-            f.write("    <Document>\n")
-            f.write("      <DataVersion XsdVersion=\"0.0.0.1\">0.0.0.1</DataVersion>\n")
-            f.write("      <DataType>hiCurve</DataType>\n")
-            f.write("      <LDocNode>//hxml/data</LDocNode>\n")
-            f.write("      <PlatformVersion>n.a.</PlatformVersion>\n")
-            f.write("    </Document>\n")
-            f.write("  </head>\n")
-            f.write("  <data>\n")
-            f.write(f"    <dataset WorkingTitle=\"{working_title_xml}\">\n")
-            f.write("      <longDataSetDesc/>\n")
-            f.write("      <shortDataSetDesc/>\n")
-            f.write("      <acpEarhookType/>\n")
-            f.write("      <v-curvedata>\n")
-            # CurveDataName now strictly equals the saved file name (may differ from WorkingTitle/preset)
-            f.write(f"        <curvedata CurveDataName=\"{curve_data_name_xml}\" MeasurementDate=\"{now}\"\n")
-            f.write("                   TestEquipmentNr=\"UPV_Audio_Analyzer\"\n")
-            f.write("                   Tester=\"PythonApp\">\n")
-            f.write("          <longCurveDesc/>\n")
-            f.write("          <shortCurveDesc/>\n")
-            f.write("          <curve name=\"frequency\" unit=\"Hz\">[" + " ".join(f"{x:.6f}" for x in x_vals) + "]</curve>\n")
-            f.write(f"          <curve name=\"magnitude\" unit=\"{hxml_y_unit}\">[" + " ".join(f"{y:.6f}" for y in y_vals) + "]</curve>\n")
-            f.write("        </curvedata>\n")
-            f.write("      </v-curvedata>\n")
-            f.write("    </dataset>\n")
-            f.write("  </data>\n")
+            f.write("   <head>\n")
+            f.write("      <Document>\n")
+            f.write("         <DataVersion XsdVersion=\"0.0.0.1\">0.0.0.1</DataVersion>\n")
+            f.write("         <DataType>hiCurve</DataType>\n")
+            f.write("         <LDocNode>//hxml/data</LDocNode>\n")
+            f.write("         <PlatformVersion>n.a.</PlatformVersion>\n")
+            f.write("      </Document>\n")
+            f.write("   </head>\n")
+            f.write("   <data>\n")
+            f.write(f"      <dataset WorkingTitle=\"{working_title_xml}\">\n")
+            f.write("         <longDataSetDesc/>\n")
+            f.write("         <shortDataSetDesc/>\n")
+            f.write("         <acpEarhookType/>\n")
+            f.write("         <v-curvedata>\n")
+            f.write(f"            <curvedata CurveDataName=\"{curve_data_name_xml}\" MeasurementDate=\"{now}\" TestEquipmentNr=\"UPV_Audio_Analyzer\" Tester=\"PythonApp\">\n")
+            f.write("               <longCurveDesc/>\n")
+            f.write("               <shortCurveDesc/>\n")
+            f.write("               <curve name=\"f\" unit=\"Hz\">[" + " ".join(f"{x:.6f}" for x in x_vals) + "]</curve>\n")
+            f.write(f"               <curve name=\"level\" unit=\"{hxml_y_unit}\">[" + " ".join(f"{y:.6f}" for y in y_vals) + "]</curve>\n")
+            f.write("            </curvedata>\n")
+            f.write("         </v-curvedata>\n")
+            f.write("      </dataset>\n")
+            f.write("   </data>\n")
+            f.write("   <environment/>\n")
             f.write("</hxml>\n")
 
         print(f"✅ File saved to '{export_path}'")

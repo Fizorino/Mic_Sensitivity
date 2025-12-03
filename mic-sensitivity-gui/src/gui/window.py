@@ -1,4 +1,4 @@
-from cProfile import label
+# Removed unused import 'label' from cProfile for cleanup
 import pyvisa
 import json
 import math
@@ -6,8 +6,8 @@ import threading
 import time  # added for non-blocking sweep polling
 import queue  # NEW: for decoupling acquisition from GUI
 from pathlib import Path
-from tkinter import Tk, Frame, Button, Label, filedialog, messagebox, Canvas, Scrollbar
-from upv.upv_auto_config import find_upv_ip, apply_grouped_settings, fetch_and_plot_trace, load_config, save_config
+from tkinter import Tk, Frame, Button, Label, filedialog, messagebox, Canvas, Scrollbar, Toplevel, BooleanVar
+from upv.upv_auto_config import find_upv_ip, apply_grouped_settings, load_config, save_config, fetch_and_plot_trace
 from tkinter import ttk, Entry
 from gui.display_map import (
     INSTRUMENT_GENERATOR_OPTIONS,
@@ -31,9 +31,11 @@ class MainWindow(Frame):
         self.run_upv_callback = run_upv_callback
         self.master = master
         self.master.title("UPV GUI")
-        self.master.geometry("1200x700")  # Wider window for all sections
+        self.master.geometry("1180x680")  # Slightly tighter default height
+        self.master.configure(bg="#f5f6f8")
+        self._apply_theme()
 
-        self.top_frame = Frame(self.master)
+        self.top_frame = Frame(self.master, bg="#f5f6f8")
         self.top_frame.pack(pady=20, fill="x")
 
         # Left spacer
@@ -41,30 +43,49 @@ class MainWindow(Frame):
         self.left_spacer.pack(side="left", expand=True)
 
         # Left column for main controls
-        self.left_frame = Frame(self.top_frame)
+        self.left_frame = Frame(self.top_frame, bg="#f5f6f8")
         self.left_frame.pack(side="left", padx=(0, 20), anchor="n")
 
-        Label(self.left_frame, text="UPV GUI", font=("Helvetica", 16)).pack(pady=10)
+        Label(self.left_frame, text="UPV GUI", font=("Segoe UI", 16, "bold"), bg="#f5f6f8").pack(pady=(4, 12))
 
         # Use grid for button rows to prevent shifting
         btn_width = 18
-        button_row1 = Frame(self.left_frame)
-        button_row1.pack(pady=5)
+        button_row1 = Frame(self.left_frame, bg="#f5f6f8")
+        button_row1.pack(pady=(0,4))
         btn1 = Button(button_row1, text="Connect to UPV", command=self.connect_to_upv, width=btn_width)
         self.connect_btn = btn1
         btn2 = Button(button_row1, text="Save Preset", command=self.save_preset, width=btn_width)
         btn1.grid(row=0, column=0, padx=(0, 8), pady=0)
         btn2.grid(row=0, column=1, padx=(0, 0), pady=0)
 
-        button_row2 = Frame(self.left_frame)
-        button_row2.pack(pady=5)
+        button_row2 = Frame(self.left_frame, bg="#f5f6f8")
+        button_row2.pack(pady=(0,4))
         btn3 = Button(button_row2, text="Apply Settings", command=self.apply_settings, width=btn_width)
         btn4 = Button(button_row2, text="Load Preset", command=self.load_preset, width=btn_width)
         btn3.grid(row=0, column=0, padx=(0, 8), pady=0)
         btn4.grid(row=0, column=1, padx=(0, 0), pady=0)
 
+        # Tracking for multi-selection presets (define BEFORE building inline selector)
+        self._measurement_vars = {}
+        self._measurement_selection_order = []  # ordered paths as user ticks
+        self._sequence_active = False
+        self._sequence_presets = []
+        self._sequence_index = -1
+        self._sequence_collected_traces = []  # Collected traces during sequence
+        self._excluded_selected_paths = set()  # Items removed from execution order but still ticked
+        self._measurement_row_frames = {}  # map Path -> row frame for scrolling
+        self._measurement_canvas = None  # store canvas to enable scroll-to-row
+        # Root directory for discovering measurement preset JSON files (user-changeable)
+        self._measurement_dir = Path(SETTINGS_FILE).parent
+        # Drag-and-drop reorder removed; rely on Up/Down buttons only
+
+        # Inline multi-measurement selection panel (checkboxes beside buttons)
+        self.inline_measure_container = Frame(self.top_frame, bg="#f5f6f8")
+        self.inline_measure_container.pack(side="left", padx=(10, 0), anchor="n")
+        self._build_inline_measurement_selector()
+
         btn5 = Button(self.left_frame, text="Start Sweep", command=self.start_sweep, width=btn_width)
-        btn5.pack(pady=5)
+        btn5.pack(pady=(6,4))
         self.start_sweep_btn = btn5
         # Require Apply Settings before allowing sweep start
         self._settings_applied = False
@@ -78,7 +99,7 @@ class MainWindow(Frame):
             width=btn_width,
             state="disabled"
         )
-        self.stop_sweep_btn.pack(pady=2)
+        self.stop_sweep_btn.pack(pady=(0,4))
 
         # Internal state tracking for continuous sweep
         self._continuous_active = False
@@ -86,29 +107,35 @@ class MainWindow(Frame):
         self._single_sweep_in_progress = False
         # Track currently loaded preset base name for export working title (default active at startup)
         self._current_preset_name = DEFAULT_PRESET_NAME
+        # Legacy popup selector attributes retained for compatibility
+        self._measurement_selector_win = None
+        self._multi_selected_files = []
+        self._merged_measurement_settings = None
 
         # Snapshot (read-back) button
         btn_snapshot = Button(self.left_frame, text="Snapshot Settings", command=self.snapshot_upv, width=btn_width)
-        btn_snapshot.pack(pady=2)
+        btn_snapshot.pack(pady=(0,6))
 
-        # Show Sweep Display (instrument + embedded plot)
-        btn_show_disp = Button(self.left_frame, text="Show Sweep Display", command=self.show_sweep_display, width=btn_width)
-        btn_show_disp.pack(pady=2)
-        # Keep reference to display button (we may disable/hide if switching to fully automatic live view later)
-        self._show_display_btn = btn_show_disp
+        # Removed legacy Show Sweep Display button (direct trace popup)
 
         # Right spacer
         self.right_spacer = Frame(self.top_frame)
         self.right_spacer.pack(side="left", expand=True)
 
-        self.status_label = Label(self.left_frame, text="", fg="green")
-        self.status_label.pack(pady=10)
+        self.status_label = Label(self.left_frame, text="", fg="green", bg="#f5f6f8")
+        self.status_label.pack(pady=(4,6))
         # Display currently loaded preset (default on startup)
-        self.preset_label = Label(self.left_frame, text=f"Preset: {self._current_preset_name}", fg="#555555")
-        self.preset_label.pack(pady=(0,8))
+        self.preset_label = Label(self.left_frame, text=f"Preset: {self._current_preset_name}", fg="#555555", bg="#f5f6f8")
+        self.preset_label.pack(pady=(0,10))
+        # Backend-defined fixed Y-axis (user not editing in GUI): defaults 30 to 100
+        self._fixed_y_min = 30.0
+        self._fixed_y_max = 100.0
+        # Backend-defined fixed X-axis (frequency) with auto expansion if data exceeds bounds
+        self._fixed_x_min = 100.0
+        self._fixed_x_max = 20000.0
 
         # 2x2 grid container for four independently scrollable panels
-        self.grid_frame = Frame(self.master)
+        self.grid_frame = Frame(self.master, bg="#f5f6f8")
         self.grid_frame.pack(side="top", expand=True, fill="both")
         for r in range(2):
             self.grid_frame.grid_rowconfigure(r, weight=1)
@@ -152,6 +179,12 @@ class MainWindow(Frame):
         self._acq_stop_event = threading.Event()
         self._acq_fail_count = 0
         self._live_consumer_started = False
+        # Multi-window live sweep support (one plot per preset in a sequence)
+        self._live_windows = []
+        self._force_new_live_window = False
+        # After a sequence completes, require user to press 'Apply Selected' again
+        # before enabling Start Sweep (locks previous settings).
+        self._sequence_completed_lock = False
 
     # ---------------- Safe VISA Helpers -----------------
     def _safe_query(self, cmd: str, *, timeout_ms: int = 1500, strip: bool = True):
@@ -245,13 +278,7 @@ class MainWindow(Frame):
             pass
         return 'dBV'
 
-    def _freeze_axis_limits(self, ax, x_vals, y_vals):
-        """Deprecated: retained for backward compatibility (no-op after fixed range change)."""
-        try:
-            # No action; fixed frequency range logic now applied via _apply_fixed_freq_and_auto_level.
-            return
-        except Exception:
-            pass
+    # Removed deprecated _freeze_axis_limits (previously no-op)
 
     # New helper now locking Y-axis strictly to instrument limits once acquired.
     def _apply_fixed_freq_and_auto_level(self, ax, x_vals, y_vals):  # keeping name for compatibility
@@ -268,11 +295,47 @@ class MainWindow(Frame):
           4. If no data yet and no valid span, show provisional (0,1) once (avoid flicker) until something better arrives.
         """
         try:
-            FMIN, FMAX = 100.0, 12000.0
+            # Auto-expand X-axis if incoming data exceeds current fixed bounds.
             try:
-                ax.set_xlim(FMIN, FMAX)
+                if x_vals:
+                    local_x_min = min(x_vals)
+                    local_x_max = max(x_vals)
+                    # Extend lower bound if necessary (add 5% span headroom or at least -1)
+                    if local_x_min < self._fixed_x_min:
+                        span = self._fixed_x_max - self._fixed_x_min if self._fixed_x_max > self._fixed_x_min else 1.0
+                        headroom = span * 0.05
+                        new_min = local_x_min - headroom
+                        if new_min > self._fixed_x_min:  # headroom too small fallback
+                            new_min = local_x_min - 1.0
+                        self._fixed_x_min = new_min
+                    # Extend upper bound if necessary (5% headroom or +1)
+                    if local_x_max > self._fixed_x_max:
+                        span = self._fixed_x_max - self._fixed_x_min if self._fixed_x_max > self._fixed_x_min else local_x_max
+                        headroom = span * 0.05
+                        new_max = local_x_max + headroom
+                        if new_max <= self._fixed_x_max:
+                            new_max = local_x_max + 1.0
+                        self._fixed_x_max = new_max
+                ax.set_xlim(self._fixed_x_min, self._fixed_x_max)
             except Exception:
                 pass
+
+            # Apply backend fixed Y-axis limits with auto upward extension if data exceeds current max.
+            try:
+                if y_vals:
+                    # If any value exceeds current max, extend with 5% headroom (do not shrink later).
+                    local_max = max(y_vals)
+                    if local_max > self._fixed_y_max:
+                        span_y = self._fixed_y_max - self._fixed_y_min if self._fixed_y_max > self._fixed_y_min else abs(local_max)
+                        headroom_y = span_y * 0.05
+                        new_y_max = local_max + headroom_y
+                        if new_y_max <= self._fixed_y_max:
+                            new_y_max = local_max + 1.0
+                        self._fixed_y_max = new_y_max
+                ax.set_ylim(self._fixed_y_min, self._fixed_y_max)
+            except Exception:
+                pass
+            return
 
             have_data = bool(x_vals) and bool(y_vals)
 
@@ -353,6 +416,7 @@ class MainWindow(Frame):
         except Exception:
             pass
 
+
     # ---------------- Connection / Scanning -----------------
     def _anim_scan_tick(self):
         """Animate scanning status while background thread searches for UPV."""
@@ -375,7 +439,8 @@ class MainWindow(Frame):
         try:
             if not hasattr(self, 'start_sweep_btn'):
                 return
-            if getattr(self, '_settings_applied', False) and self.upv is not None:
+            if (getattr(self, '_settings_applied', False) and self.upv is not None and
+                not getattr(self, '_sequence_completed_lock', False)):
                 self.start_sweep_btn.config(state="normal")
             else:
                 self.start_sweep_btn.config(state="disabled")
@@ -1974,46 +2039,7 @@ class MainWindow(Frame):
         except Exception as e:
             messagebox.showerror("Save Error", f"Could not save settings: {e}")
 
-    def connect_to_upv(self):
-        visa_address = load_config()
-        rm = pyvisa.ResourceManager()
-        self.status_label.config(text="Connecting to UPV...")
-        self.status_label.update_idletasks()
-        self.upv = None
-
-        def status_callback(msg):
-            self.status_label.config(text=msg)
-            self.status_label.update_idletasks()
-
-        if visa_address:
-            try:
-                status_callback(f"🔌 Trying saved UPV address: {visa_address}")
-                upv = rm.open_resource(visa_address)
-                upv.timeout = 3000
-                idn = upv.query("*IDN?").strip()
-                status_callback(f"✅ Connected to: {idn}")
-                self.upv = upv
-                return
-            except Exception as e:
-                status_callback(f"❌ Saved address failed: {e}\nSearching for a new UPV (LAN/USB)...")
-                visa_address = None
-
-        if not visa_address:
-            visa_address = find_upv_ip(status_callback)
-            if not visa_address:
-                status_callback("❌ No UPV found. Please check LAN/USB connection and power.")
-                self.upv = None
-                return
-            try:
-                upv = rm.open_resource(visa_address)
-                upv.timeout = 5000
-                idn = upv.query("*IDN?").strip()
-                status_callback(f"✅ Connected to new UPV: {idn}")
-                save_config(visa_address)
-                self.upv = upv
-            except Exception as e:
-                status_callback(f"❌ Failed to connect to newly found UPV: {e}")
-                self.upv = None
+    # Removed synchronous connect_to_upv; asynchronous version retained later for better UX
 
     def apply_settings(self):
         try:
@@ -2423,12 +2449,13 @@ class MainWindow(Frame):
             export_path = filedialog.asksaveasfilename(defaultextension=".hxml",
                                                        filetypes=[("HXML files", "*.hxml"), ("All files", "*.*")])
             if export_path:
-                # Use preset name for working title if one has been loaded; fallback handled in fetch_and_plot_trace
+                # Use preset name (self._current_preset_name) as CurveDataName source; unified format handled in helper
                 try:
                     fetch_and_plot_trace(self.upv, export_path, working_title=self._current_preset_name)
                 except TypeError:
-                    # Backwards compatibility if older function signature present
                     fetch_and_plot_trace(self.upv, export_path)
+                except Exception as e:
+                    messagebox.showerror("Export Error", f"Failed to export sweep: {e}")
         else:
             messagebox.showwarning("Warning", "Not connected to UPV.")
 
@@ -2440,6 +2467,10 @@ class MainWindow(Frame):
         if self.upv is None:
             messagebox.showerror("Sweep Error", "UPV is not connected.")
             return
+
+        # Always open a fresh Live Sweep window for every manual Start Sweep
+        # (user request). This overrides any existing window reuse behavior.
+        self._force_new_live_window = True
 
         def status_callback(msg):
             self.update_status(msg)
@@ -2541,26 +2572,70 @@ class MainWindow(Frame):
         except Exception:
             pass
         # Show popup only if root still alive
+        # (Prompt removed per user request: no modal popup for single sweep completion/abort)
+        # We rely solely on status label updates now.
         try:
-            if self.winfo_exists():
-                messagebox.showinfo("Sweep", "Single sweep completed!" if success else "Single sweep ended (timeout/abort)")
+            if not self.winfo_exists():
+                return
         except Exception:
             pass
-        # Offer export only after popup (user acknowledgement) to avoid stacked dialogs
-        if success:
+        # Offer export only after popup when NOT in a sequence; sequences export once at end
+        if success and not getattr(self, '_sequence_active', False):
             try:
                 self.fetch_data()
             except Exception:
                 pass
+        # Collect trace data for sequence aggregation
+        if success and getattr(self, '_sequence_active', False):
+            try:
+                x_raw = self._safe_query("TRAC:SWE1:LOAD:AX?", timeout_ms=3000)
+                y_raw = self._safe_query("TRAC:SWE1:LOAD:AY?", timeout_ms=3000)
+                x_vals, y_vals = [], []
+                if x_raw and y_raw:
+                    try:
+                        x_vals = [float(v) for v in x_raw.split(',') if v.strip()]
+                        y_vals = [float(v) for v in y_raw.split(',') if v.strip()]
+                    except Exception:
+                        x_vals, y_vals = [], []
+                if x_vals and y_vals and len(x_vals) == len(y_vals):
+                    self._sequence_collected_traces.append({
+                        'name': self._current_preset_name,
+                        'x': x_vals,
+                        'y': y_vals,
+                        'unit': self._resolve_y_unit_from_settings() or 'dBV'
+                    })
+            except Exception:
+                pass
         try:
-            self._settings_applied = False
-            if hasattr(self, 'start_sweep_btn'):
-                self.start_sweep_btn.config(state="disabled")
-            self.update_status("Sweep finished. Apply Settings again to enable start.", color="green")
+            # If sequence is active, keep settings applied for next preset auto-load; else revert
+            if getattr(self, '_sequence_active', False):
+                self.update_status("Sweep finished.")
+            else:
+                self._settings_applied = False
+                if hasattr(self, 'start_sweep_btn'):
+                    self.start_sweep_btn.config(state="disabled")
+                self.update_status("Sweep finished. Apply Settings again to enable start.", color="green")
         except Exception:
             pass
         try:
             self._refresh_start_sweep_state()
+        except Exception:
+            pass
+        # Sequence continuation (new model)
+        try:
+            if getattr(self, '_sequence_active', False):
+                # Automatic continuation: if more presets remain, proceed without prompting
+                remaining = len(getattr(self, '_sequence_presets', [])) - getattr(self, '_sequence_index', -1) - 1
+                if remaining > 0:
+                    # Reset single sweep done flag for next run
+                    self._single_sweep_done = False
+                    self._sequence_index += 1
+                    self.after(150, lambda: self._apply_preset_and_start(self._sequence_index))
+                else:
+                    # Final sequence completion -> single combined export
+                    self.update_status("Sequence completed. Preparing combined export...")
+                    self._sequence_active = False
+                    self.after(120, self._export_combined_sequence_hxml)
         except Exception:
             pass
 
@@ -2722,114 +2797,7 @@ class MainWindow(Frame):
             self.update_status("Snapshot failed", color="red")
             messagebox.showerror("Snapshot Error", f"Failed to create snapshot: {e}")
 
-    def show_sweep_display(self):
-        """Send DISPlay:SWEep:SHOW to UPV and embed current sweep trace in a popup window.
-
-        Steps:
-          1. Ensure connection.
-          2. Issue SCPI to force instrument display.
-          3. Query trace data (frequency & magnitude).
-          4. Resolve Y units (SENS:USER > SENS:UNIT > SENS1:UNIT > dBV).
-          5. Render matplotlib plot inside a transient Toplevel without blocking main UI.
-        """
-        if self.upv is None:
-            messagebox.showwarning("UPV", "Not connected to UPV.")
-            return
-        try:
-            # Tell instrument to show its sweep display (best-effort)
-            try:
-                self.upv.write("DISPlay:SWEep:SHOW")
-            except Exception:
-                pass  # Non-fatal if instrument firmware variant differs
-
-            # Fetch trace data directly
-            try:
-                x_raw = self.upv.query("TRAC:SWE1:LOAD:AX?")
-                y_raw = self.upv.query("TRAC:SWE1:LOAD:AY?")
-            except Exception as e:
-                messagebox.showerror("Trace Error", f"Failed to read sweep trace: {e}")
-                return
-            import numpy as _np
-            try:
-                x_vals = _np.fromstring(x_raw, sep=',')
-                y_vals = _np.fromstring(y_raw, sep=',')
-            except Exception as e:
-                messagebox.showerror("Parse Error", f"Failed to parse trace data: {e}")
-                return
-            if len(x_vals) == 0 or len(x_vals) != len(y_vals):
-                messagebox.showerror("Trace Error", "Empty or mismatched trace data.")
-                return
-
-            # Unit resolution (reuse logic priorities)
-            y_unit_display = 'dBV'
-            try:
-                import json as _json
-                if Path(SETTINGS_FILE).exists():
-                    with open(SETTINGS_FILE, 'r', encoding='utf-8') as _sf:
-                        _settings_data = _json.load(_sf)
-                    user_unit_raw = _settings_data.get('SENS:USER')
-                    std_unit_raw = _settings_data.get('SENS:UNIT') or _settings_data.get('SENS1:UNIT')
-                    def _sanitize(s: str) -> str:
-                        if not isinstance(s, str):
-                            return ''
-                        s2 = s.strip().strip('"').strip("'")
-                        low = s2.lower()
-                        if low.startswith('db'):
-                            rest = s2[2:].lstrip()
-                            toks = [t.upper() if t.lower() == 'spl' else t for t in rest.split()]
-                            return 'dB ' + ' '.join(toks) if toks else 'dB'
-                        return s2
-                    if isinstance(user_unit_raw, str) and user_unit_raw.strip():
-                        cand = _sanitize(user_unit_raw)
-                        if cand:
-                            y_unit_display = cand
-                        else:
-                            if isinstance(std_unit_raw, str):
-                                yu = std_unit_raw.strip().upper()
-                                unit_map = {'DBR':'dBr','DBV':'dBV','DBU':'dBu','DBM':'dBm','V':'V','MV':'mV','UV':'μV','UVR':'μV','UV RMS':'μV','UVRMS':'μV','PCT':'%','%':'%'}
-                                y_unit_display = unit_map.get(yu, std_unit_raw.strip())
-                    elif isinstance(std_unit_raw, str):
-                        yu = std_unit_raw.strip().upper()
-                        unit_map = {'DBR':'dBr','DBV':'dBV','DBU':'dBu','DBM':'dBm','V':'V','MV':'mV','UV':'μV','UVR':'μV','UV RMS':'μV','UVRMS':'μV','PCT':'%','%':'%'}
-                        y_unit_display = unit_map.get(yu, std_unit_raw.strip())
-            except Exception:
-                pass
-
-            # Build / reuse popup window
-            import tkinter as _tk
-            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-            from matplotlib.figure import Figure
-
-            # Destroy previous plot window if still open
-            if hasattr(self, '_sweep_plot_win') and self._sweep_plot_win is not None:
-                try:
-                    self._sweep_plot_win.destroy()
-                except Exception:
-                    pass
-            self._sweep_plot_win = _tk.Toplevel(self.master)
-            self._sweep_plot_win.title("Sweep Display")
-            self._sweep_plot_win.geometry("700x450")
-            # Figure
-            fig = Figure(figsize=(7, 4.2), dpi=100)
-            ax = fig.add_subplot(111)
-            ax.semilogx(x_vals, y_vals)
-            ax.set_xlabel('Frequency (Hz)')
-            ax.set_ylabel(f'Level ({y_unit_display})')
-            ax.set_title('Sweep Trace')
-            ax.grid(True, which='both', ls='--', linewidth=0.5)
-            # Force refresh of axis limits for explicit display request
-            self._force_freq_limit_refresh = True
-            self._apply_fixed_freq_and_auto_level(ax, x_vals, y_vals)
-            fig.tight_layout()
-
-            canvas = FigureCanvasTkAgg(fig, master=self._sweep_plot_win)
-            canvas.draw()
-            canvas.get_tk_widget().pack(fill='both', expand=True)
-
-            self.update_status("Sweep display updated.")
-        except Exception as e:
-            messagebox.showerror("Display Error", f"Failed to show sweep: {e}")
-            self.update_status("Failed to show sweep", color="red")
+    # (Legacy show_sweep_display removed)
 
     # ---------------- Live Sweep Display (Auto Refresh) -----------------
     def _init_live_sweep_display(self):
@@ -2839,27 +2807,31 @@ class MainWindow(Frame):
         import tkinter as _tk
         from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
         from matplotlib.figure import Figure
-        create_new = False
-        if not hasattr(self, '_sweep_plot_win') or self._sweep_plot_win is None or not self._sweep_plot_win.winfo_exists():
-            create_new = True
+        # Decide whether to create a new window (sequence wants a fresh window per preset)
+        force_new = getattr(self, '_force_new_live_window', False)
+        create_new = force_new or not hasattr(self, '_sweep_plot_win') or self._sweep_plot_win is None or not self._sweep_plot_win.winfo_exists()
         if create_new:
             try:
-                self._sweep_plot_win = _tk.Toplevel(self.master)
-                self._sweep_plot_win.title("Live Sweep")
-                self._sweep_plot_win.geometry("700x450")
+                win = _tk.Toplevel(self.master)
+                win.title("Live Sweep")
+                win.geometry("700x450")
                 fig = Figure(figsize=(7, 4.2), dpi=100)
                 ax = fig.add_subplot(111)
                 ax.set_xscale('log')
                 ax.set_xlabel('Frequency (Hz)')
                 ax.set_ylabel(f'Level ({self._resolve_y_unit_from_settings()})')
-                ax.set_title('Live Sweep Trace')
+                try:
+                    plot_title = self._current_preset_name or 'Live Sweep'
+                except Exception:
+                    plot_title = 'Live Sweep'
+                ax.set_title(plot_title)
                 ax.grid(True, which='both', ls='--', linewidth=0.5)
                 try:
                     ax.set_xlim(100, 12000)
                 except Exception:
                     pass
                 fig.tight_layout()
-                canvas = FigureCanvasTkAgg(fig, master=self._sweep_plot_win)
+                canvas = FigureCanvasTkAgg(fig, master=win)
                 canvas.draw()
                 canvas.get_tk_widget().pack(fill='both', expand=True)
                 self._live_fig = fig
@@ -2869,17 +2841,43 @@ class MainWindow(Frame):
                     (self._live_line,) = ax.semilogx([], [], color='C0')
                 except Exception:
                     self._live_line = None
-                def _on_close():
+                # Assign latest window reference
+                self._sweep_plot_win = win
+                def _on_close(local_win=win):
+                    """Robust per-window close handler.
+
+                    Ensures the specific window being closed is destroyed, removed from
+                    tracking list, and acquisition/polling threads stopped ONLY if no
+                    remaining live sweep windows are open.
+                    """
                     try:
-                        self._live_consumer_started = False
-                        self._stop_acquisition_thread()
+                        # Remove from tracking list
+                        self._live_windows = [info for info in self._live_windows if info.get('win') is not local_win]
                     except Exception:
                         pass
                     try:
-                        self._sweep_plot_win.destroy()
+                        if local_win is self._sweep_plot_win:
+                            self._sweep_plot_win = None
                     except Exception:
                         pass
-                self._sweep_plot_win.protocol("WM_DELETE_WINDOW", _on_close)
+                    try:
+                        local_win.destroy()
+                    except Exception:
+                        pass
+                    # If no remaining live windows, stop acquisition / polling
+                    try:
+                        if not self._live_windows:
+                            self._live_consumer_started = False
+                            self._stop_acquisition_thread()
+                    except Exception:
+                        pass
+                win.protocol("WM_DELETE_WINDOW", _on_close)
+                # Track this window so previous graphs remain visible
+                try:
+                    self._live_windows.append({'win': win, 'fig': fig, 'ax': ax, 'line': self._live_line})
+                except Exception:
+                    pass
+                self._force_new_live_window = False
             except Exception:
                 return
         # Start acquisition thread if needed
@@ -3529,3 +3527,641 @@ class MainWindow(Frame):
         self.status_label.config(text=msg, fg=color)
         self.status_label.update_idletasks()
         # Keep preset label visible; optionally append to status text if desired (disabled by default)
+
+    # ---------------- Measurement Multi-Select -----------------
+    def _apply_theme(self):
+        """Configure ttk styles for a cleaner modern look."""
+        try:
+            style = ttk.Style()
+            # Prefer a modern native theme if available
+            for candidate in ("vista", "xpnative", "clam"):
+                if candidate in style.theme_names():
+                    style.theme_use(candidate)
+                    break
+            # Base button style (slightly increased padding)
+            style.configure("TButton", font=("Segoe UI", 9), padding=(8, 5))
+            style.configure("InlineHeader.TLabel", font=("Segoe UI", 12, "bold"))
+            style.configure("Preset.TCheckbutton", font=("Segoe UI", 9))
+            current_theme = style.theme_use()
+            # Some native Windows themes ignore manual background changes for buttons.
+            # Provide a colorized variant only on 'clam'; otherwise fall back to bold font.
+            if current_theme == "clam":
+                style.configure(
+                    "Primary.TButton",
+                    font=("Segoe UI", 9, "bold"),
+                    padding=(10, 6),
+                    background="#2563eb",
+                    foreground="#ffffff"
+                )
+                style.map(
+                    "Primary.TButton",
+                    background=[("active", "#1d4ed8"), ("pressed", "#1e40af"), ("disabled", "#93a5be")],
+                    foreground=[("disabled", "#e6e6e6"), ("!disabled", "#ffffff")]
+                )
+            else:
+                # Fallback: avoid background override so text remains visible.
+                style.configure(
+                    "Primary.TButton",
+                    font=("Segoe UI", 9, "bold"),
+                    padding=(10, 6)
+                )
+                style.map("Primary.TButton", foreground=[("disabled", "#7a7a7a"), ("!disabled", "#000000")])
+        except Exception:
+            pass
+
+    def _zebra_color(self, idx: int) -> str:
+        return "#ffffff" if idx % 2 == 0 else "#f0f2f5"
+
+    def _list_measurement_presets(self):
+        directory = getattr(self, '_measurement_dir', None)
+        files = []
+        try:
+            base_dir = Path(directory) if directory else Path(SETTINGS_FILE).parent
+            if not base_dir.exists() or not base_dir.is_dir():
+                return []
+            for f in base_dir.iterdir():
+                if f.is_file() and f.suffix.lower() == '.json':
+                    if f.name.lower() in {'settings.json', 'config.json'}:
+                        continue
+                    files.append(f)
+        except Exception:
+            return []
+        return sorted(files)
+
+    def choose_measurement_folder(self):
+        from tkinter import filedialog, messagebox
+        # Allow user to see JSON files; choose one to set folder
+        initial = str(getattr(self, '_measurement_dir', Path(SETTINGS_FILE).parent))
+        chosen = filedialog.askopenfilename(title="Select a JSON file in preset folder",
+                                            initialdir=initial,
+                                            filetypes=[("JSON files", "*.json"), ("All files", "*.*")])
+        if not chosen:
+            return
+        try:
+            file_path = Path(chosen)
+            if not file_path.exists() or not file_path.is_file():
+                messagebox.showerror("Selection Error", "Selected item is not a file.")
+                return
+            parent_dir = file_path.parent
+            self._measurement_dir = parent_dir
+        except Exception as e:
+            messagebox.showerror("Selection Error", f"Failed to use selection: {e}")
+            return
+        # Reset selection state and invalidate sweep start until Apply Selected
+        self._measurement_selection_order = []
+        self._excluded_selected_paths.clear()
+        self._sequence_completed_lock = True
+        self._settings_applied = False
+        try:
+            if hasattr(self, 'start_sweep_btn'):
+                self.start_sweep_btn.config(state='disabled')
+        except Exception:
+            pass
+        self._build_inline_measurement_selector()
+        self._refresh_selected_preview()
+        self._refresh_start_sweep_state()
+        try:
+            self.update_status(f"Loaded folder: {self._measurement_dir.name} (from {file_path.name}). Tick presets then Apply Selected.", color="orange")
+        except Exception:
+            pass
+
+    def _build_inline_measurement_selector(self):
+        """Build or rebuild measurement selector with preview column of chosen presets."""
+        for w in self.inline_measure_container.winfo_children():
+            w.destroy()
+
+        header_row = Frame(self.inline_measure_container, bg="#f5f6f8")
+        header_row.pack(fill="x", pady=(0,4))
+        ttk.Label(header_row, text="Measurements", style="InlineHeader.TLabel").pack(side="left", pady=(0,2))
+        Button(header_row, text="Select Folder...", command=self.choose_measurement_folder, width=13).pack(side="right", padx=(0,4))
+
+        container = Frame(self.inline_measure_container, bg="#f5f6f8")
+        container.pack(fill="x", padx=2, pady=2)
+
+        # Scrollable list of presets
+        canvas = Canvas(container, height=270, width=240, highlightthickness=1, highlightbackground="#d0d3d6")
+        scrollbar = Scrollbar(container, orient="vertical", command=canvas.yview)
+        list_frame = Frame(canvas, bg="#ffffff")
+        canvas.create_window((0,0), window=list_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        list_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.pack(side="left", fill="both", expand=False)
+        scrollbar.pack(side="left", fill="y")
+        self._measurement_canvas = canvas
+        self._measurement_row_frames.clear()
+
+        # Selected preview column
+        preview_frame = Frame(container, bg="#eef3fb", highlightthickness=1, highlightbackground="#d0d3d6")
+        preview_frame.pack(side="left", padx=(10,0), anchor="n")
+        Label(preview_frame, text="Selected", font=("Segoe UI", 10, "bold"), bg="#eef3fb", fg="#2c3e50").pack(anchor="w", pady=(0,2))
+        from tkinter import Listbox
+        self._selected_preview_listbox = Listbox(preview_frame, height=15, width=22, exportselection=False)
+        self._selected_preview_listbox.pack(anchor="w", padx=4, pady=(0,4))
+        # Unified preview action panel (grid for neat alignment)
+        action_panel = Frame(preview_frame, bg="#eef3fb")
+        action_panel.pack(anchor="w", pady=(4,6))
+        # First row: removal / restore
+        remove_btn = ttk.Button(action_panel, text="Remove", width=10, command=self._remove_preview_item)
+        restore_btn = ttk.Button(action_panel, text="Restore All", width=12, command=self._restore_all_preview)
+        remove_btn.grid(row=0, column=0, padx=(0,8), pady=3, sticky="w")
+        restore_btn.grid(row=0, column=1, padx=(0,0), pady=3, sticky="w")
+        # Second row: ordering
+        up_btn = ttk.Button(action_panel, text="Up", width=7, command=lambda: self._move_preview_item(-1))
+        down_btn = ttk.Button(action_panel, text="Down", width=7, command=lambda: self._move_preview_item(1))
+        up_btn.grid(row=1, column=0, padx=(0,8), pady=3, sticky="w")
+        down_btn.grid(row=1, column=1, padx=(0,0), pady=3, sticky="w")
+        # Column weight (optional future expansion)
+        action_panel.grid_columnconfigure(0, weight=0)
+        action_panel.grid_columnconfigure(1, weight=0)
+
+        # Scroll bindings
+        def _activate(c):
+            self._activate_scroll(c)
+        for widget in (canvas, list_frame):
+            widget.bind("<Enter>", lambda e, c=canvas: _activate(c))
+            widget.bind("<Leave>", lambda e: _activate(None))
+            def _mw(e, c=canvas):
+                delta = e.delta
+                steps = int(-delta/120) if delta else 0
+                if steps:
+                    c.yview_scroll(steps, 'units')
+                return 'break'
+            widget.bind('<MouseWheel>', _mw, add='+')
+            widget.bind('<Button-4>', lambda e, c=canvas: (c.yview_scroll(-1,'units'), 'break'))
+            widget.bind('<Button-5>', lambda e, c=canvas: (c.yview_scroll(1,'units'), 'break'))
+
+        # Populate presets
+        self._measurement_vars.clear()
+        presets = self._list_measurement_presets()
+        if not presets:
+            Label(list_frame, text="No preset JSON files found.").pack(anchor="w", pady=4)
+        for idx, p in enumerate(presets):
+            var = BooleanVar(value=False)
+            row_bg = self._zebra_color(idx)
+            row = Frame(list_frame, bg=row_bg)
+            row.pack(fill="x")
+            cb = ttk.Checkbutton(row, text=p.stem, variable=var, style="Preset.TCheckbutton")
+            cb.pack(anchor="w", padx=4, pady=2)
+            def _mk_handler(path):
+                def _handler(*_a):
+                    try:
+                        if self._measurement_vars[path].get():
+                            if path not in self._measurement_selection_order:
+                                self._measurement_selection_order.append(path)
+                        else:
+                            if path in self._measurement_selection_order:
+                                self._measurement_selection_order.remove(path)
+                        # Ensure removal exclusion respected
+                        if path in self._excluded_selected_paths and not self._measurement_vars[path].get():
+                            self._excluded_selected_paths.remove(path)
+                        self._refresh_selected_preview()
+                        # Invalidate previously applied settings/sequence until user presses Apply Selected
+                        self._sequence_completed_lock = True
+                        self._settings_applied = False
+                        try:
+                            if hasattr(self, 'start_sweep_btn'):
+                                self.start_sweep_btn.config(state='disabled')
+                        except Exception:
+                            pass
+                        self._refresh_start_sweep_state()
+                        try:
+                            self.update_status("Selection changed - press Apply Selected.", color="orange")
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
+                return _handler
+            var.trace_add('write', _mk_handler(p))
+            row.bind('<Enter>', lambda e, r=row: r.configure(bg="#e2e6ea"))
+            row.bind('<Leave>', lambda e, r=row, c=row_bg: r.configure(bg=c))
+            self._measurement_vars[p] = var
+            self._measurement_row_frames[p] = row
+
+        Label(self.inline_measure_container, text="Tick presets then Apply Selected", font=("Segoe UI", 8), fg="#444", bg="#f5f6f8").pack(pady=(6,2))
+        # Action buttons moved to bottom (user request) with refined spacing
+        bottom_actions = Frame(self.inline_measure_container, bg="#f5f6f8")
+        bottom_actions.pack(fill="x", pady=(12,6))
+        # Centered grid layout for consistent professional look
+        btn_select_all = ttk.Button(bottom_actions, text="Select All", width=12, command=lambda: self._set_all_measurements(True))
+        btn_clear = ttk.Button(bottom_actions, text="Clear", width=9, command=lambda: self._set_all_measurements(False))
+        # Explicit text specification; width left flexible to avoid truncation/invisibility on some themes
+        btn_apply = ttk.Button(bottom_actions, text="Apply Selected", style="Primary.TButton", command=self.apply_selected_measurements)
+        # Use grid with spacer columns to center
+        bottom_actions.grid_columnconfigure(0, weight=1)
+        bottom_actions.grid_columnconfigure(5, weight=1)
+        btn_select_all.grid(row=0, column=1, padx=8, pady=3)
+        btn_clear.grid(row=0, column=2, padx=8, pady=3)
+        btn_apply.grid(row=0, column=3, padx=8, pady=3)
+        self._refresh_selected_preview()
+        # Bind interactions: double-click to scroll, drag reorder
+        self._selected_preview_listbox.bind('<Double-Button-1>', self._on_preview_double_click)
+
+    def _refresh_selected_preview(self):
+        """Update preview list showing ticked presets in selection order."""
+        lb = getattr(self, '_selected_preview_listbox', None)
+        if lb is None:
+            return
+        lb.delete(0, 'end')
+        ordered = [p for p in self._measurement_selection_order if self._measurement_vars.get(p) and self._measurement_vars[p].get() and p not in self._excluded_selected_paths]
+        remaining = [p for p, var in self._measurement_vars.items() if var.get() and p not in ordered and p not in self._excluded_selected_paths]
+        for p in ordered + sorted(remaining, key=lambda x: x.stem.lower()):
+            lb.insert('end', p.stem)
+
+    def _on_preview_double_click(self, event):
+        lb = self._selected_preview_listbox
+        idx = lb.nearest(event.y)
+        if idx < 0:
+            return
+        stem = lb.get(idx)
+        target = next((p for p in self._measurement_vars.keys() if p.stem == stem), None)
+        if not target:
+            return
+        self._scroll_to_measure_row(target)
+
+    def _scroll_to_measure_row(self, path):
+        canvas = self._measurement_canvas
+        row = self._measurement_row_frames.get(path)
+        if not canvas or not row:
+            return
+        try:
+            canvas.update_idletasks()
+            list_frame = row.master
+            total_h = max(list_frame.winfo_height() - canvas.winfo_height(), 1)
+            y = row.winfo_y()
+            fraction = min(max(y / total_h, 0.0), 1.0)
+            canvas.yview_moveto(fraction)
+        except Exception:
+            pass
+
+
+    def _move_preview_item(self, delta: int):
+        """Move selected preview item up or down by delta (+1 or -1)."""
+        lb = getattr(self, '_selected_preview_listbox', None)
+        if lb is None:
+            return
+        sel = lb.curselection()
+        if not sel:
+            return
+        idx = sel[0]
+        new_idx = idx + delta
+        if new_idx < 0 or new_idx >= lb.size():
+            return
+        item = lb.get(idx)
+        lb.delete(idx)
+        lb.insert(new_idx, item)
+        lb.selection_clear(0, 'end')
+        lb.selection_set(new_idx)
+        # Update internal order
+        stems = [lb.get(i) for i in range(lb.size())]
+        new_order = []
+        for stem in stems:
+            path = next((p for p in self._measurement_vars.keys() if p.stem == stem), None)
+            if path and path not in self._excluded_selected_paths:
+                new_order.append(path)
+        self._measurement_selection_order = new_order
+
+    def _remove_preview_item(self):
+        lb = getattr(self, '_selected_preview_listbox', None)
+        if not lb:
+            return
+        sel = lb.curselection()
+        if not sel:
+            return
+        stem = lb.get(sel[0])
+        path = next((p for p in self._measurement_vars.keys() if p.stem == stem), None)
+        if not path:
+            return
+        self._excluded_selected_paths.add(path)
+        if path in self._measurement_selection_order:
+            self._measurement_selection_order.remove(path)
+        self._refresh_selected_preview()
+        # Selection changed; lock start until Apply Selected
+        self._sequence_completed_lock = True
+        self._settings_applied = False
+        try:
+            if hasattr(self, 'start_sweep_btn'):
+                self.start_sweep_btn.config(state='disabled')
+        except Exception:
+            pass
+        self._refresh_start_sweep_state()
+        try:
+            self.update_status("Selection changed - press Apply Selected.", color="orange")
+        except Exception:
+            pass
+
+    def _restore_all_preview(self):
+        self._excluded_selected_paths.clear()
+        self._refresh_selected_preview()
+        # Selection changed; lock start until Apply Selected
+        self._sequence_completed_lock = True
+        self._settings_applied = False
+        try:
+            if hasattr(self, 'start_sweep_btn'):
+                self.start_sweep_btn.config(state='disabled')
+        except Exception:
+            pass
+        self._refresh_start_sweep_state()
+        try:
+            self.update_status("Selection changed - press Apply Selected.", color="orange")
+        except Exception:
+            pass
+
+    def refresh_inline_measurements(self):
+        """Public helper to refresh the inline measurement checkbox list."""
+        self._measurement_selection_order = []
+        self._build_inline_measurement_selector()
+        self._refresh_selected_preview()
+
+    def open_measurement_selector(self):
+        if self._measurement_selector_win and self._measurement_selector_win.winfo_exists():
+            self._measurement_selector_win.lift()
+            return
+        win = Toplevel(self.master)
+        self._measurement_selector_win = win
+        win.title("Select Measurements")
+        win.geometry("360x480")
+        container = Frame(win)
+        container.pack(fill="both", expand=True, padx=10, pady=10)
+        canvas = Canvas(container)
+        scrollbar = Scrollbar(container, orient="vertical", command=canvas.yview)
+        list_frame = Frame(canvas)
+        list_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0,0), window=list_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        self._measurement_vars.clear()
+        presets = self._list_measurement_presets()
+        if not presets:
+            Label(list_frame, text="No preset JSON files found.").pack(anchor="w", pady=4)
+        for p in presets:
+            var = BooleanVar(value=False)
+            # Trace to record selection order
+            def _mk_handler(path):
+                def _handler(*_args):
+                    try:
+                        if self._measurement_vars[path].get():
+                            if path not in self._measurement_selection_order:
+                                self._measurement_selection_order.append(path)
+                        else:
+                            if path in self._measurement_selection_order:
+                                self._measurement_selection_order.remove(path)
+                        # Invalidate applied settings until Apply Selected pressed
+                        self._sequence_completed_lock = True
+                        self._settings_applied = False
+                        try:
+                            if hasattr(self, 'start_sweep_btn'):
+                                self.start_sweep_btn.config(state='disabled')
+                        except Exception:
+                            pass
+                        self._refresh_start_sweep_state()
+                        try:
+                            self.update_status("Selection changed - press Apply Selected.", color="orange")
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
+                return _handler
+            var.trace_add('write', _mk_handler(p))
+            cb = ttk.Checkbutton(list_frame, text=p.stem, variable=var)
+            cb.pack(anchor="w", pady=2)
+            self._measurement_vars[p] = var
+        btn_frame = Frame(win)
+        btn_frame.pack(fill="x", pady=8)
+        Button(btn_frame, text="Select All", command=lambda: self._set_all_measurements(True)).pack(side="left", padx=5)
+        Button(btn_frame, text="Clear", command=lambda: self._set_all_measurements(False)).pack(side="left", padx=5)
+        Button(btn_frame, text="Apply Selected", command=self.apply_selected_measurements).pack(side="right", padx=5)
+
+    def _set_all_measurements(self, state: bool):
+        for var in self._measurement_vars.values():
+            var.set(state)
+        self._refresh_selected_preview()
+        # Bulk selection change invalidates applied settings/sequence
+        self._sequence_completed_lock = True
+        self._settings_applied = False
+        try:
+            if hasattr(self, 'start_sweep_btn'):
+                self.start_sweep_btn.config(state='disabled')
+        except Exception:
+            pass
+        self._refresh_start_sweep_state()
+        try:
+            self.update_status("Selection changed - press Apply Selected.", color="orange")
+        except Exception:
+            pass
+
+    def _deep_merge(self, base: dict, other: dict):
+        for k, v in other.items():
+            if k in base and isinstance(base[k], dict) and isinstance(v, dict):
+                self._deep_merge(base[k], v)
+            else:
+                base[k] = v
+        return base
+
+    def apply_selected_measurements(self):
+        """Start a measurement sequence using the order the user ticked the boxes.
+
+        Flow:
+          1. Apply first preset immediately and start its sweep (no prompt).
+                    2. Automatically apply next preset and start its sweep until all presets complete (no user prompt).
+        """
+        if not self.upv:
+            messagebox.showwarning("Not Connected", "Connect to UPV before applying measurements.")
+            return
+        # Build ordered list from selection order; fall back to alphabetical if user didn't change order
+        selected_paths = [p for p, var in self._measurement_vars.items() if var.get() and p not in self._excluded_selected_paths]
+        if not selected_paths:
+            messagebox.showinfo("No Selection", "Please tick at least one measurement preset.")
+            return
+        ordered = [p for p in self._measurement_selection_order if p in selected_paths]
+        # Append any selected not yet in order list (e.g. user selected all via Select All)
+        for p in selected_paths:
+            if p not in ordered:
+                ordered.append(p)
+        self._sequence_presets = ordered
+        self._sequence_index = 0
+        self._sequence_active = True
+        # Clear any prior completion lock when starting a new sequence
+        self._sequence_completed_lock = False
+        self._refresh_start_sweep_state()
+        # Inline version does not destroy any window; just proceed
+        self.update_status(f"Sequence started ({len(ordered)} presets). Applying {ordered[0].stem} (waiting for Start Sweep)...")
+        # Apply first preset only (no auto sweep start)
+        self.after(30, lambda: self._apply_preset(self._sequence_index))
+
+    def _apply_preset(self, index: int):
+        if not self._sequence_active:
+            return
+        if index < 0 or index >= len(self._sequence_presets):
+            self.update_status("Sequence index out of range.", color="red")
+            self._sequence_active = False
+            return
+        path = self._sequence_presets[index]
+        try:
+            with open(path, 'r', encoding='utf-8') as fh:
+                data = json.load(fh)
+        except Exception as e:
+            messagebox.showerror("Load Error", f"{path.name}: {e}")
+            # Skip to next
+            self._sequence_index += 1
+            if self._sequence_index < len(self._sequence_presets):
+                self.after(100, lambda: self._apply_preset(self._sequence_index))
+            else:
+                self.update_status("Sequence finished (errors).", color="orange")
+                self._sequence_active = False
+                # Ensure next measurement opens a fresh Live Sweep window
+                self._force_new_live_window = True
+                # Lock start until measurements re-applied
+                self._sequence_completed_lock = True
+                self._settings_applied = False
+                try:
+                    if hasattr(self, 'start_sweep_btn'):
+                        self.start_sweep_btn.config(state='disabled')
+                except Exception:
+                    pass
+                self._refresh_start_sweep_state()
+            return
+        try:
+            apply_grouped_settings(self.upv, data)
+        except Exception as e:
+            messagebox.showerror("Apply Failed", f"{path.name}: {e}")
+            # Same skip logic
+            self._sequence_index += 1
+            if self._sequence_index < len(self._sequence_presets):
+                self.after(100, lambda: self._apply_preset(self._sequence_index))
+            else:
+                self.update_status("Sequence finished (apply errors).", color="orange")
+                self._sequence_active = False
+                self._force_new_live_window = True
+                self._sequence_completed_lock = True
+                self._settings_applied = False
+                try:
+                    if hasattr(self, 'start_sweep_btn'):
+                        self.start_sweep_btn.config(state='disabled')
+                except Exception:
+                    pass
+                self._refresh_start_sweep_state()
+            return
+        # Persist preset into settings.json so GUI reflects it
+        try:
+            with open(SETTINGS_FILE, 'w', encoding='utf-8') as sf:
+                json.dump(data, sf, indent=2, ensure_ascii=False)
+            # Reload GUI controls to show new values
+            self.load_settings()
+        except Exception as e:
+            messagebox.showwarning("Persist Warning", f"Could not write settings.json for {path.stem}: {e}")
+        # Ensure current preset name retained after reload
+        # Update GUI
+        self._current_preset_name = path.stem
+        self.preset_label.config(text=f"Preset: {path.stem}")
+        # Mark applied so sweep can start immediately
+        self._settings_applied = True
+        self._refresh_start_sweep_state()
+        self.update_status(f"Applied {path.stem}. Press 'Start Sweep' to begin.")
+
+    def _apply_preset_and_start(self, index: int):
+        # Wrapper retained for continuation flow after first sweep
+        self._apply_preset(index)
+        if not self._sequence_active:
+            return
+        # If apply failed sequence may be inactive
+        if self._sequence_index != index:
+            return
+        try:
+            self.update_status(f"Applied {self._current_preset_name}. Starting sweep...")
+            # Force creation of a new live window for each sequence preset
+            self._force_new_live_window = True
+            self.start_sweep()
+        except Exception as e:
+            messagebox.showerror("Sweep Error", f"Failed to start sweep for {self._current_preset_name}: {e}")
+            # Move to next preset if available
+            self._sequence_index += 1
+            if self._sequence_index < len(self._sequence_presets):
+                self.after(150, lambda: self._apply_preset_and_start(self._sequence_index))
+            else:
+                self.update_status("Sequence finished (start errors).", color="orange")
+                self._sequence_active = False
+                self._force_new_live_window = True
+                self._sequence_completed_lock = True
+                self._settings_applied = False
+                try:
+                    if hasattr(self, 'start_sweep_btn'):
+                        self.start_sweep_btn.config(state='disabled')
+                except Exception:
+                    pass
+                self._refresh_start_sweep_state()
+
+    def _export_combined_sequence_hxml(self):
+        """Export all collected sequence traces into one .hxml file (multi-dataset)."""
+        if not self._sequence_collected_traces:
+            self.update_status("No traces collected for export.", color="orange")
+            return
+        # Enforce lock & disable Start Sweep (extra safeguard if not already applied)
+        try:
+            self._sequence_completed_lock = True
+            self._settings_applied = False
+            if hasattr(self, 'start_sweep_btn'):
+                self.start_sweep_btn.config(state='disabled')
+            self._refresh_start_sweep_state()
+        except Exception:
+            pass
+        export_path = filedialog.asksaveasfilename(
+            defaultextension=".hxml",
+            filetypes=[("HXML files", "*.hxml"), ("All files", "*.*")],
+            title="Save Combined Sequence Results"
+        )
+        if not export_path:
+            self.update_status("Combined export cancelled.", color="orange")
+            return
+        import datetime
+        now = datetime.datetime.now().strftime("%d-%b-%Y %H:%M:%S")
+        try:
+            # Single dataset (WorkingTitle) with multiple curvedata entries like example file
+            working_title = "workingTitle"  # Match provided example; can be parameterized later
+            lines = [
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>",
+                "<hxml>",
+                "   <head>",
+                "      <Document>",
+                "         <DataVersion XsdVersion=\"0.0.0.1\">0.0.0.1</DataVersion>",
+                "         <DataType>hiCurve</DataType>",
+                "         <LDocNode>//hxml/data</LDocNode>",
+                "         <PlatformVersion>n.a.</PlatformVersion>",
+                "      </Document>",
+                "   </head>",
+                "   <data>",
+                f"      <dataset WorkingTitle=\"{working_title}\">",
+                "         <longDataSetDesc/>",
+                "         <shortDataSetDesc/>",
+                "         <acpEarhookType/>",
+                "         <v-curvedata>"
+            ]
+            for trace in self._sequence_collected_traces:
+                name = trace['name'] or 'measurement'
+                x_vals = trace['x']
+                y_vals = trace['y']
+                unit = trace.get('unit', 'dBV')
+                freq_str = '[' + ' '.join(f"{v:.6f}" for v in x_vals) + ']'
+                mag_str = '[' + ' '.join(f"{v:.6f}" for v in y_vals) + ']'
+                lines.append(f"            <curvedata CurveDataName=\"{name}\" MeasurementDate=\"{now}\" TestEquipmentNr=\"UPV_Audio_Analyzer\" Tester=\"PythonApp\">")
+                lines.append("               <longCurveDesc/>")
+                lines.append("               <shortCurveDesc/>")
+                # Follow example naming: 'f' for frequency; 'level' for magnitude
+                lines.append(f"               <curve name=\"f\" unit=\"Hz\">{freq_str}</curve>")
+                lines.append(f"               <curve name=\"level\" unit=\"{unit}\">{mag_str}</curve>")
+                lines.append("            </curvedata>")
+            lines.append("         </v-curvedata>")
+            lines.append("      </dataset>")
+            lines.append("   </data>")
+            lines.append("   <environment/>")
+            lines.append("</hxml>")
+            with open(export_path, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(lines))
+            self.update_status(f"Combined export saved: {Path(export_path).name}")
+            messagebox.showinfo("Export", f"Combined sequence exported to:\n{export_path}")
+        except Exception as e:
+            messagebox.showerror("Export Error", f"Failed to write combined HXML: {e}")
+            self.update_status("Combined export failed", color="red")
+        finally:
+            # Clear collected traces for next sequence
+            self._sequence_collected_traces = []

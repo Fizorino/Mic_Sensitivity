@@ -7,3 +7,49 @@
   File "C:\Python310\lib\tkinter\__init__.py", line 1458, in mainloop
     self.tk.mainloop(n)
 KeyboardInterrupt
+
+==== 2025-11-18T15:22:21.988589 ====Traceback (most recent call last):
+  File "c:\Users\AU001A0W\OneDrive - WSA\Documents\Mic_Sensitivity\mic-sensitivity-gui\src\main.py", line 44, in <module>
+    main()
+  File "c:\Users\AU001A0W\OneDrive - WSA\Documents\Mic_Sensitivity\mic-sensitivity-gui\src\main.py", line 41, in main
+    root.mainloop()
+  File "C:\Python310\lib\tkinter\__init__.py", line 1458, in mainloop
+    self.tk.mainloop(n)
+KeyboardInterrupt
+
+==== 2025-11-18T17:02:45.569449 ====Traceback (most recent call last):
+  File "c:\Users\AU001A0W\OneDrive - WSA\Documents\Mic_Sensitivity\mic-sensitivity-gui\src\main.py", line 44, in <module>
+    main()
+  File "c:\Users\AU001A0W\OneDrive - WSA\Documents\Mic_Sensitivity\mic-sensitivity-gui\src\main.py", line 38, in main
+    main_window = MainWindow(root, run_upv_application)
+  File "c:\Users\AU001A0W\OneDrive - WSA\Documents\Mic_Sensitivity\mic-sensitivity-gui\src\gui\window.py", line 69, in __init__
+    self._build_inline_measurement_selector()
+  File "c:\Users\AU001A0W\OneDrive - WSA\Documents\Mic_Sensitivity\mic-sensitivity-gui\src\gui\window.py", line 3573, in _build_inline_measurement_selector
+    self._measurement_vars.clear()
+AttributeError: 'MainWindow' object has no attribute '_measurement_vars'
+
+==== 2025-11-18T17:02:55.471250 ====Traceback (most recent call last):
+  File "c:\Users\AU001A0W\OneDrive - WSA\Documents\Mic_Sensitivity\mic-sensitivity-gui\src\main.py", line 44, in <module>
+    main()
+  File "c:\Users\AU001A0W\OneDrive - WSA\Documents\Mic_Sensitivity\mic-sensitivity-gui\src\main.py", line 38, in main
+    main_window = MainWindow(root, run_upv_application)
+  File "c:\Users\AU001A0W\OneDrive - WSA\Documents\Mic_Sensitivity\mic-sensitivity-gui\src\gui\window.py", line 69, in __init__
+    self._build_inline_measurement_selector()
+  File "c:\Users\AU001A0W\OneDrive - WSA\Documents\Mic_Sensitivity\mic-sensitivity-gui\src\gui\window.py", line 3573, in _build_inline_measurement_selector
+    self._measurement_vars.clear()
+AttributeError: 'MainWindow' object has no attribute '_measurement_vars'
+
+==== 2025-11-18T17:11:32.400725 ====Traceback (most recent call last):
+  File "c:\Users\AU001A0W\OneDrive - WSA\Documents\Mic_Sensitivity\mic-sensitivity-gui\src\main.py", line 44, in <module>
+    main()
+  File "c:\Users\AU001A0W\OneDrive - WSA\Documents\Mic_Sensitivity\mic-sensitivity-gui\src\main.py", line 38, in main
+    main_window = MainWindow(root, run_upv_application)
+  File "c:\Users\AU001A0W\OneDrive - WSA\Documents\Mic_Sensitivity\mic-sensitivity-gui\src\gui\window.py", line 79, in __init__
+    self._build_inline_measurement_selector()
+  File "c:\Users\AU001A0W\OneDrive - WSA\Documents\Mic_Sensitivity\mic-sensitivity-gui\src\gui\window.py", line 3583, in _build_inline_measurement_selector
+    Label(header_row, text="Measurements", style="InlineHeader.TLabel", background="#f5f6f8").pack(side="left", pady=(0,4))
+  File "C:\Python310\lib\tkinter\__init__.py", line 3187, in __init__
+    Widget.__init__(self, master, 'label', cnf, kw)
+  File "C:\Python310\lib\tkinter\__init__.py", line 2601, in __init__
+    self.tk.call(
+_tkinter.TclError: unknown option "-style"
