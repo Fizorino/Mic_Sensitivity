@@ -1,12 +1,3 @@
-"""Display option maps used by the GUI.
-
-De-duplicated and pruned for clarity:
- - Removed large commented legacy DISPLAY_MAP block.
- - Unified identical filter dictionaries (FILTER1/2/3) by aliasing to FILTER_OPTIONS.
- - Removed unused EQUALIZER_OPTIONS and DC_OFFSET_OPTIONS (not referenced in window.py).
-"""
-
-# Friendly display label overrides (UI label -> shorter label) while keeping internal JSON keys
 DISPLAY_LABEL_OVERRIDES = {
     "Bandwidth Analyzer Config": "Bandwidth",
     "Sweep Ctrl Analyzer Config": "Sweep Ctrl",

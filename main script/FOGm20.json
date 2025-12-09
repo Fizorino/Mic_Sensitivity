@@ -11,20 +11,20 @@
     "Bandwidth Generator": "B22",
     "Volt Range (Auto/Fix)": "AUTO",
     "Max Voltage": "10 V",
-    "Ref Voltage": "-91.60 dBV",
-    "Ref Frequency": "1000 Hz"
+    "Ref Voltage": "-91.60 DBV",
+    "Ref Frequency": "1000 HZ"
   },
   "Generator Function": {
     "Function Generator": "SIN",
     "Low Dist": "OFF",
     "Sweep Ctrl": "ALIS",
-    "Frequency": "100 Hz",
+    "Frequency": "100 HZ",
     "Next Step": "ASYN",
     "X Axis": "FREQ",
     "Z Axis": "OFF",
     "Spacing": "LOGP",
-    "Start": "100 Hz",
-    "Stop": "10000 Hz",
+    "Start": "100 HZ",
+    "Stop": "10000 HZ",
     "Points": "101",
     "Halt": "MUTE",
     "Voltage": "70 DBR",
@@ -42,9 +42,9 @@
     "CH1 Impedance": "R200K",
     "CH1 Ground/Common": "GRO",
     "CH1 Range": "AUTO",
-    "Ref Imped": "600 ohm",
+    "Ref Imped": "600 OHM",
     "Start Cond": "AUTO",
-    "Delay": "0 s",
+    "Delay": "0 S",
     "MAX FFT Size": "S256K"
   },
   "Analyzer Function": {
@@ -58,9 +58,9 @@
     "Filter3": "OFF",
     "Fnct Settling": "EXP",
     "Samples": "3",
-    "Tolerance": "0.10000000149 %",
-    "Resolution": "0.10000050813 dBV",
-    "Timeout": "10 s",
+    "Tolerance": "0.10000000149 PCT",
+    "Resolution": "0.10000050813 DBV",
+    "Timeout": "10 S",
     "Bargraph": "OFF",
     "POST FFT": "OFF",
     "Level Monitor": "OFF",
@@ -70,4 +70,5 @@
     "Waveform": "OFF"
   },
   "INIT:CONT": "OFF"
+  
 }

@@ -1,12 +1,14 @@
 {
   "SENS:UNIT": "DBR",
-  "SENS:UNA": "ON",
+  "SENS:UNA": "OFF",
+  "SENS:USER": "'db SPL'",
   "DISP:SWE1:A:UNIT:TRAC": "ON",
+  "INIT:CONT": "ON",
   "Generator Config": {
     "Instrument Generator": "ANLG",
     "Channel Generator": "CH1",
     "Output Type (Unbal/Bal)": "UNB",
-    "Impedance": "R10",
+    "Impedance": "R5",
     "Common (Float/Ground)": "GRO",
     "Bandwidth Generator": "B22",
     "Volt Range (Auto/Fix)": "AUTO",
@@ -17,17 +19,17 @@
   "Generator Function": {
     "Function Generator": "SIN",
     "Low Dist": "OFF",
-    "Sweep Ctrl": "ALIS",
-    "Frequency": "100 Hz",
+    "Sweep Ctrl": "OFF",
+    "Frequency": "12000 Hz",
     "Next Step": "ASYN",
     "X Axis": "FREQ",
     "Z Axis": "OFF",
     "Spacing": "LOGP",
     "Start": "100 Hz",
-    "Stop": "10000 Hz",
+    "Stop": "20000 Hz",
     "Points": "101",
     "Halt": "MUTE",
-    "Voltage": "70 DBR",
+    "Voltage": "70 dBr",
     "Filter": "OFF",
     "Equalizer": "ON",
     "DC Offset": "OFF"
@@ -45,21 +47,21 @@
     "Ref Imped": "600 ohm",
     "Start Cond": "AUTO",
     "Delay": "0 s",
+    "Play bef.Meas": "OFF",
     "MAX FFT Size": "S256K"
   },
   "Analyzer Function": {
     "Function Analyzer": "RMS",
     "S/N Sequence": "OFF",
     "Meas Time": "GENT",
-    "Sweep Ctrl Analyzer Config": "OFF",
     "Notch(Gain)": "OFF",
     "Filter1": "OFF",
     "Filter2": "OFF",
     "Filter3": "OFF",
     "Fnct Settling": "EXP",
     "Samples": "3",
-    "Tolerance": "0.10000000149 %",
-    "Resolution": "0.10000050813 dBV",
+    "Tolerance": "0.1 %",
+    "Resolution": "0.1 dBV",
     "Timeout": "10 s",
     "Bargraph": "OFF",
     "POST FFT": "OFF",
@@ -68,6 +70,5 @@
     "Input Monitor": "OFF",
     "Freq/Phase": "OFF",
     "Waveform": "OFF"
-  },
-  "INIT:CONT": "OFF"
+  }
 }

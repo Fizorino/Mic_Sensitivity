@@ -3590,20 +3590,18 @@ class MainWindow(Frame):
 
     def choose_measurement_folder(self):
         from tkinter import filedialog, messagebox
-        # Allow user to see JSON files; choose one to set folder
+        # Let user select the folder that contains preset JSON files
         initial = str(getattr(self, '_measurement_dir', Path(SETTINGS_FILE).parent))
-        chosen = filedialog.askopenfilename(title="Select a JSON file in preset folder",
-                                            initialdir=initial,
-                                            filetypes=[("JSON files", "*.json"), ("All files", "*.*")])
+        chosen = filedialog.askdirectory(title="Select preset folder",
+                                         initialdir=initial)
         if not chosen:
             return
         try:
-            file_path = Path(chosen)
-            if not file_path.exists() or not file_path.is_file():
-                messagebox.showerror("Selection Error", "Selected item is not a file.")
+            dir_path = Path(chosen)
+            if not dir_path.exists() or not dir_path.is_dir():
+                messagebox.showerror("Selection Error", "Selected item is not a folder.")
                 return
-            parent_dir = file_path.parent
-            self._measurement_dir = parent_dir
+            self._measurement_dir = dir_path
         except Exception as e:
             messagebox.showerror("Selection Error", f"Failed to use selection: {e}")
             return
@@ -3621,7 +3619,7 @@ class MainWindow(Frame):
         self._refresh_selected_preview()
         self._refresh_start_sweep_state()
         try:
-            self.update_status(f"Loaded folder: {self._measurement_dir.name} (from {file_path.name}). Tick presets then Apply Selected.", color="orange")
+            self.update_status(f"Loaded folder: {self._measurement_dir.name}. Tick presets then Apply Selected.", color="orange")
         except Exception:
             pass
 
