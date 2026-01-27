@@ -6,6 +6,7 @@ import threading
 import time  # added for non-blocking sweep polling
 import queue  # NEW: for decoupling acquisition from GUI
 from pathlib import Path
+import sys
 from tkinter import Tk, Frame, Button, Label, filedialog, messagebox, Canvas, Scrollbar, Toplevel, BooleanVar
 from upv.upv_auto_config import find_upv_ip, apply_grouped_settings, load_config, save_config, fetch_and_plot_trace
 from tkinter import ttk, Entry
@@ -18,7 +19,13 @@ from gui.display_map import (
     DISPLAY_LABEL_OVERRIDES
 )
 
-SETTINGS_FILE = r"c:\Users\AU001A0W\OneDrive - WSA\Documents\Mic_Sensitivity\settings.json"
+try:
+    from utils.paths import data_path
+
+    SETTINGS_FILE = str(data_path('settings.json'))
+except Exception:
+    # Fallback to local working directory
+    SETTINGS_FILE = str(Path('settings.json').resolve())
 # Default preset base name (without .json). When user edits any control after loading a non-default preset,
 # the active preset label reverts to this default to signal divergence from the loaded preset.
 DEFAULT_PRESET_NAME = "settings"  # Changed from 'main_settings' per user request

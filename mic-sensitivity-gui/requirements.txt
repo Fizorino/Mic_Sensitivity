@@ -2,3 +2,5 @@ pyvisa
 matplotlib
 numpy
 tkinter
+jaraco.text
+appdirs

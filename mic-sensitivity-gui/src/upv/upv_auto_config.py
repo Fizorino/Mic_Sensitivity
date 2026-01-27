@@ -2,14 +2,25 @@ import pyvisa
 import json
 import time
 from pathlib import Path
+import matplotlib
+matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 import numpy as np
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import datetime
 
-CONFIG_FILE = "config.json"
-SETTINGS_FILE = "settings.json"
+try:
+    from utils.paths import data_path
+except Exception:
+    data_path = None
+
+if data_path is not None:
+    CONFIG_FILE = str(data_path('config.json'))
+    SETTINGS_FILE = str(data_path('settings.json'))
+else:
+    CONFIG_FILE = "config.json"
+    SETTINGS_FILE = "settings.json"
 
 # SCPI command groups for each section
 command_groups = {
