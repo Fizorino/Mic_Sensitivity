@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Microphone Sensitivity GUI — Project Overview</title>
+<style>
+  body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; max-width: 900px; margin: 40px auto; padding: 0 30px; color: #222; line-height: 1.7; }
+  h1 { color: #1a3a5c; border-bottom: 3px solid #1a3a5c; padding-bottom: 8px; }
+  h2 { color: #2c5282; margin-top: 36px; border-bottom: 1px solid #cbd5e0; padding-bottom: 4px; }
+  h3 { color: #2d3748; margin-top: 24px; }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; }
+  th, td { border: 1px solid #cbd5e0; padding: 8px 12px; text-align: left; }
+  th { background: #edf2f7; font-weight: 600; }
+  tr:nth-child(even) { background: #f7fafc; }
+  code { background: #edf2f7; padding: 2px 6px; border-radius: 3px; font-size: 0.95em; }
+  pre { background: #1a202c; color: #e2e8f0; padding: 16px 20px; border-radius: 6px; overflow-x: auto; font-size: 0.9em; line-height: 1.5; }
+  .note { background: #ebf8ff; border-left: 4px solid #3182ce; padding: 12px 16px; margin: 16px 0; border-radius: 0 4px 4px 0; }
+  ul { margin: 8px 0; }
+  li { margin: 4px 0; }
+  @media print { body { margin: 20px; } pre { font-size: 0.8em; } }
+</style>
+</head>
+<body>
+
+<h1>Microphone Sensitivity GUI — UPV Audio Analyzer Automation</h1>
+<p><strong>Bachelor Thesis Project Overview</strong></p>
+
+<hr>
+
+<h2>1. What This Project Is</h2>
+<p>
+This is a <strong>Python desktop application</strong> that provides a graphical interface to control and automate a
+<strong>Rohde &amp; Schwarz UPV Audio Analyzer</strong> — a precision laboratory instrument used for acoustic measurements.
+Instead of manually operating the UPV's complex front panel for every measurement, this software automates the
+entire workflow: configuring the instrument, running frequency sweeps, capturing data in real-time, and exporting
+results in a standardized format.
+</p>
+
+<h2>2. The Problem It Solves</h2>
+<p>Performing microphone sensitivity measurements (and related tests like OSPL90, FOG, etc.) on the UPV requires:</p>
+<ul>
+  <li>Manually entering dozens of SCPI instrument commands via the front panel</li>
+  <li>Waiting for sweeps to complete with no visual feedback on a PC</li>
+  <li>Manually exporting data after each measurement</li>
+  <li>Repeating the entire process for every measurement preset</li>
+</ul>
+<p>
+This GUI <strong>eliminates this manual process</strong> by letting the user load a preset, click a button,
+and receive a plotted result plus an exportable data file — all from a single application window.
+</p>
+
+<h2>3. System Architecture</h2>
+<pre>
+┌──────────────────────────┐
+│   Tkinter GUI            │  ← User interacts here
+│   (window.py)            │
+├──────────────────────────┤
+│   Display Mapping        │  ← Translates SCPI codes ↔ human-readable labels
+│   (display_map.py)       │     e.g. "ANLG" → "Analog", "UNB" → "Unbalanced"
+├──────────────────────────┤
+│   UPV Communication      │  ← Sends SCPI commands via PyVISA (LAN/USB)
+│   (upv_auto_config.py)   │     e.g. "SOUR:FREQ 1000" sets generator to 1 kHz
+│   (upv_readback.py)      │     Can also read back current instrument state
+├──────────────────────────┤
+│   R&amp;S UPV Instrument     │  ← Physical audio analyzer hardware
+└──────────────────────────┘
+            ↓ output
+     .hxml files + Matplotlib plots
+</pre>
+
+<h2>4. Key Source Files</h2>
+<table>
+  <tr><th>File</th><th>Role</th></tr>
+  <tr><td><code>src/main.py</code></td><td>Application entry point — creates the Tkinter window, handles crash logging</td></tr>
+  <tr><td><code>src/gui/window.py</code></td><td><strong>Main GUI</strong> (~4000 lines) — 4-panel settings editor, live sweep display, multi-preset sequencing</td></tr>
+  <tr><td><code>src/gui/display_map.py</code></td><td>Dictionaries mapping SCPI codes to human-readable display labels (40+ filter types, generator functions, etc.)</td></tr>
+  <tr><td><code>src/upv/upv_auto_config.py</code></td><td>Core instrument interface — applies settings via SCPI, fetches trace data, generates HXML output</td></tr>
+  <tr><td><code>src/upv/upv_readback.py</code></td><td>Reads current UPV instrument state back into a JSON snapshot file</td></tr>
+  <tr><td><code>src/utils/paths.py</code></td><td>Path resolution for both development and packaged (.exe) environments</td></tr>
+</table>
+
+<h2>5. Data Flow — End-to-End Workflow</h2>
+<h3>Step 1: Connect</h3>
+<p>The application scans VISA resources (LAN/USB), discovers the UPV instrument, and saves the connection address to <code>config.json</code> for future sessions.</p>
+
+<h3>Step 2: Configure</h3>
+<p>The user selects a JSON preset file (e.g., <code>mic_sensitivity.json</code>). The preset defines all instrument parameters organised into four sections: Generator Config, Generator Function, Analyzer Config, and Analyzer Function.</p>
+
+<h3>Step 3: Apply Settings</h3>
+<p>The application translates each JSON key into a SCPI command and sends it to the UPV. For example:</p>
+<ul>
+  <li><code>"Start": "100 Hz"</code> → <code>SOUR:SWE:FREQ:STAR 100 Hz</code></li>
+  <li><code>"Function Generator": "SIN"</code> → <code>SOUR:FUNC SIN</code></li>
+  <li><code>"Output Type (Unbal/Bal)": "UNB"</code> → <code>OUTP:TYPE UNB</code></li>
+</ul>
+
+<h3>Step 4: Sweep</h3>
+<p>The user clicks "Start Sweep". A <strong>background thread</strong> polls trace data from the UPV in real time, pushing it through a thread-safe queue to the GUI for live plotting. The user sees the frequency response curve building point-by-point.</p>
+
+<h3>Step 5: Export</h3>
+<p>Results are saved as <code>.hxml</code> files (an XML format containing frequency + level arrays with metadata) and displayed as a Matplotlib plot with a logarithmic X-axis.</p>
+
+<h2>6. JSON Preset Structure</h2>
+<p>Each measurement type (microphone sensitivity, OSPL90, FOG, etc.) is defined by a JSON preset file:</p>
+<pre>
+{
+  "SENS:UNIT": "DBR",
+  "Generator Config": {
+    "Instrument Generator": "ANLG",
+    "Output Type (Unbal/Bal)": "UNB",
+    "Max Voltage": "10 V",
+    "Ref Frequency": "1000 Hz"
+  },
+  "Generator Function": {
+    "Function Generator": "SIN",
+    "Sweep Ctrl": "ASW",
+    "Start": "100 Hz",
+    "Stop": "20000 Hz",
+    "Points": "101",
+    "Voltage": "94 dBr"
+  },
+  "Analyzer Config": {
+    "Instrument Analyzer": "ANLG",
+    "Channel Analyzer": "CH1",
+    "CH1 Input": "UNB",
+    "CH1 Impedance": "R200K",
+    "Start Cond": "AUT"
+  },
+  "Analyzer Function": {
+    "Function Analyzer": "RMS",
+    "Freq Mode": "AUTO",
+    "Fnct Settling": "AUTO"
+  }
+}
+</pre>
+
+<h3>Available Presets</h3>
+<table>
+  <tr><th>Preset</th><th>Description</th></tr>
+  <tr><td><code>mic_sensitivity.json</code></td><td>Microphone sensitivity measurement (100–20 kHz, 101 points, log spacing)</td></tr>
+  <tr><td><code>OSPL90.json</code></td><td>Output Sound Pressure Level at 90 dB (dB SPL units, high-level test)</td></tr>
+  <tr><td><code>COP_Sensitivity.json</code></td><td>Sensitivity measurement with 10 Ω impedance configuration</td></tr>
+  <tr><td><code>FOGm20.json</code></td><td>FOG measurement at −20 dB condition</td></tr>
+  <tr><td><code>FOG_Li50.json</code></td><td>FOG measurement at Li50 condition</td></tr>
+  <tr><td><code>sweep12k.json</code></td><td>Single sine at 12 kHz (test/calibration preset)</td></tr>
+  <tr><td><code>1k@70k.json</code></td><td>1 kHz tone at 70 kHz bandwidth configuration</td></tr>
+</table>
+
+<h2>7. HXML Output Format</h2>
+<p>Results are exported as <code>.hxml</code> (XML-based), a format compatible with downstream acoustic analysis tools:</p>
+<pre>
+&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;hxml&gt;
+  &lt;head&gt;
+    &lt;Document&gt;
+      &lt;DataType&gt;hiCurve&lt;/DataType&gt;
+    &lt;/Document&gt;
+  &lt;/head&gt;
+  &lt;data&gt;
+    &lt;dataset WorkingTitle="workingTitle"&gt;
+      &lt;v-curvedata&gt;
+        &lt;curvedata
+          CurveDataName="mic_sensitivity"
+          MeasurementDate="19-Nov-2025 09:41:44"
+          TestEquipmentNr="UPV_Audio_Analyzer"
+          Tester="PythonApp"&gt;
+          &lt;curve name="f" unit="Hz"&gt;
+            [100.000 105.441 ... 20000.000]
+          &lt;/curve&gt;
+          &lt;curve name="level" unit="dBr"&gt;
+            [114.354 114.319 ... 59.088]
+          &lt;/curve&gt;
+        &lt;/curvedata&gt;
+      &lt;/v-curvedata&gt;
+    &lt;/dataset&gt;
+  &lt;/data&gt;
+&lt;/hxml&gt;
+</pre>
+<p>Each file contains two parallel data arrays: <strong>frequency points</strong> (Hz) and corresponding <strong>measured levels</strong> (in the configured unit — dBV, dBr, dB SPL, etc.).</p>
+
+<h2>8. GUI Features</h2>
+<h3>Main Window (4-Panel Layout)</h3>
+<ul>
+  <li><strong>Generator Config panel</strong> — Instrument selection, output type, impedance, voltage range, reference values</li>
+  <li><strong>Generator Function panel</strong> — Waveform type, sweep control, frequency range, spacing, voltage</li>
+  <li><strong>Analyzer Config panel</strong> — Input channel, coupling, bandwidth, impedance, trigger settings</li>
+  <li><strong>Analyzer Function panel</strong> — Measurement function (RMS, THD, FFT, etc.), filters, settling, monitors</li>
+</ul>
+
+<h3>Control Buttons</h3>
+<ul>
+  <li><strong>Connect to UPV</strong> — Automatic instrument discovery on LAN/USB</li>
+  <li><strong>Apply Settings</strong> — Send all GUI parameters to instrument</li>
+  <li><strong>Start Sweep</strong> — Begin measurement with live plot display</li>
+  <li><strong>Stop Continuous</strong> — Halt continuous sweep mode</li>
+  <li><strong>Save Preset / Load Preset</strong> — Manage measurement configurations</li>
+  <li><strong>Snapshot Settings</strong> — Read back current instrument state</li>
+</ul>
+
+<h3>Multi-Preset Sequencing</h3>
+<ul>
+  <li>Inline checkbox list of available measurement presets</li>
+  <li>Drag/reorder with Up/Down buttons</li>
+  <li>Remove/Restore items from execution order</li>
+  <li>"Apply Selected" runs all chosen presets sequentially</li>
+  <li>Each preset gets its own live plot window</li>
+  <li>Combined HXML export after sequence completes</li>
+</ul>
+
+<h2>9. Notable Engineering Decisions</h2>
+<table>
+  <tr><th>Aspect</th><th>Approach</th></tr>
+  <tr><td><strong>Concurrency</strong></td><td>Background acquisition thread + thread-safe VISA mutex lock + queue-based producer/consumer pattern — keeps the GUI responsive during live sweeps</td></tr>
+  <tr><td><strong>Multi-Preset Sequencing</strong></td><td>Users can tick multiple presets, reorder them, and run all sequentially — each preset gets its own live plot window</td></tr>
+  <tr><td><strong>Unit Handling</strong></td><td>Automatic normalization of units across presets (dBV, dBu, dBm, dB SPL, μV, %, etc.) with on-the-fly conversion in the GUI</td></tr>
+  <tr><td><strong>Packaging</strong></td><td>PyInstaller build script produces a standalone <code>.exe</code> with all presets bundled — no Python installation required on the measurement PC</td></tr>
+  <tr><td><strong>Robustness</strong></td><td>Global crash logger, timeout-guarded SCPI queries, graceful fallbacks when instrument disconnects mid-measurement</td></tr>
+  <tr><td><strong>Value Normalization</strong></td><td>Snapshot and preset values are automatically cleaned (e.g. "PCT" → "%", "DBV" → "dBV", "uV" → "μV") for consistent display</td></tr>
+</table>
+
+<h2>10. Technologies Used</h2>
+<table>
+  <tr><th>Technology</th><th>Purpose</th></tr>
+  <tr><td><strong>Python 3</strong></td><td>Core programming language</td></tr>
+  <tr><td><strong>Tkinter</strong></td><td>GUI framework (native, no external dependency on Windows)</td></tr>
+  <tr><td><strong>PyVISA</strong></td><td>VISA library for instrument communication via SCPI over LAN/USB</td></tr>
+  <tr><td><strong>Matplotlib</strong></td><td>Real-time plotting of frequency response curves</td></tr>
+  <tr><td><strong>NumPy</strong></td><td>Numerical computation and data array handling</td></tr>
+  <tr><td><strong>PyInstaller</strong></td><td>Packaging into standalone Windows executable</td></tr>
+</table>
+
+<h2>11. Folder Structure Overview</h2>
+<table>
+  <tr><th>Folder / File</th><th>Contents</th></tr>
+  <tr><td><code>mic-sensitivity-gui/src/</code></td><td>Application source code (GUI, instrument drivers, utilities)</td></tr>
+  <tr><td><code>mic-sensitivity-gui/assets/</code></td><td>Application icon and visual assets</td></tr>
+  <tr><td><code>mic-sensitivity-gui/tools/</code></td><td>Build helper scripts (icon generation)</td></tr>
+  <tr><td><code>*.json</code> (root)</td><td>Measurement preset files and configuration</td></tr>
+  <tr><td><code>Results/</code></td><td>Exported .hxml measurement data files</td></tr>
+  <tr><td><code>main script/</code></td><td>Original standalone script versions (before GUI was built)</td></tr>
+  <tr><td><code>build/</code></td><td>PyInstaller build artifacts</td></tr>
+</table>
+
+<hr>
+<p style="color: #718096; font-size: 0.9em; margin-top: 40px;">Generated from project source code — Microphone Sensitivity GUI</p>
+
+</body>
+</html>

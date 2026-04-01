@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Presentation Notes — Microphone Sensitivity GUI</title>
+<style>
+  body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; max-width: 850px; margin: 40px auto; padding: 0 30px; color: #222; line-height: 1.8; }
+  h1 { color: #1a3a5c; border-bottom: 3px solid #1a3a5c; padding-bottom: 8px; font-size: 1.6em; }
+  h2 { color: #2c5282; margin-top: 32px; border-left: 4px solid #2c5282; padding-left: 12px; font-size: 1.2em; }
+  ul { margin: 8px 0 16px 0; padding-left: 24px; }
+  li { margin: 5px 0; }
+  li strong { color: #2d3748; }
+  .slide-note { background: #fffbeb; border-left: 4px solid #d69e2e; padding: 10px 14px; margin: 12px 0; border-radius: 0 4px 4px 0; font-size: 0.92em; color: #744210; }
+  code { background: #edf2f7; padding: 2px 5px; border-radius: 3px; font-size: 0.93em; }
+  hr { border: none; border-top: 1px solid #e2e8f0; margin: 30px 0; }
+  @media print { body { margin: 20px; } .slide-note { break-inside: avoid; } }
+</style>
+</head>
+<body>
+
+<h1>Presentation Notes — Microphone Sensitivity GUI</h1>
+
+<!-- ============================================================ -->
+<h2>1. Project Introduction</h2>
+<ul>
+  <li>Built a <strong>Python desktop application</strong> to automate acoustic measurements on an R&amp;S UPV Audio Analyzer</li>
+  <li>Replaces the <strong>manual, repetitive process</strong> of configuring the instrument and collecting data</li>
+  <li>Provides a <strong>single GUI window</strong> to configure, measure, visualise, and export — all in one place</li>
+  <li>Packaged as a <strong>standalone Windows .exe</strong> — no Python installation needed on the lab PC</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2>2. Problem Statement</h2>
+<ul>
+  <li>The UPV Audio Analyzer requires <strong>dozens of manual SCPI commands</strong> to set up each measurement</li>
+  <li>Each test type (sensitivity, OSPL90, FOG, etc.) needs a <strong>different configuration</strong> — error-prone to enter by hand</li>
+  <li>No built-in way to <strong>sequence multiple measurements</strong> back-to-back automatically</li>
+  <li>No <strong>live visual feedback</strong> on a PC while a sweep is running</li>
+  <li>Manual data export is <strong>time-consuming and inconsistent</strong></li>
+</ul>
+
+<!-- ============================================================ -->
+<h2>3. Solution Overview</h2>
+<ul>
+  <li>Store each measurement configuration as a <strong>JSON preset file</strong></li>
+  <li>GUI reads the preset → <strong>translates to SCPI commands</strong> → sends to UPV via LAN or USB</li>
+  <li>One click to <strong>apply settings</strong>, one click to <strong>start the sweep</strong></li>
+  <li>Live plot updates <strong>in real-time</strong> as the instrument sweeps</li>
+  <li>Automatic export to <strong>.hxml format</strong> (compatible with downstream analysis tools)</li>
+  <li>Can <strong>queue multiple presets</strong> and run them in sequence without manual intervention</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2>4. System Architecture</h2>
+<ul>
+  <li><strong>GUI Layer</strong> (Tkinter) — what the user sees and interacts with
+    <ul>
+      <li>4-panel layout: Generator Config, Generator Function, Analyzer Config, Analyzer Function</li>
+      <li>Each panel is independently scrollable with labelled controls</li>
+    </ul>
+  </li>
+  <li><strong>Display Mapping Layer</strong> — translates between machine codes and human-readable labels
+    <ul>
+      <li>Example: <code>ANLG</code> → "Analog", <code>UNB</code> → "Unbalanced", <code>ASW</code> → "Auto Sweep"</li>
+    </ul>
+  </li>
+  <li><strong>Instrument Communication Layer</strong> (PyVISA) — talks to the physical UPV
+    <ul>
+      <li>Sends SCPI commands over LAN (TCP/IP) or USB</li>
+      <li>Reads back trace data (frequency + level arrays)</li>
+    </ul>
+  </li>
+  <li><strong>Output Layer</strong> — saves results as .hxml files + generates Matplotlib plots</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2>5. How It Works (Step by Step)</h2>
+<ul>
+  <li><strong>Step 1 — Connect:</strong> App auto-discovers the UPV on the network (scans all VISA resources)</li>
+  <li><strong>Step 2 — Load Preset:</strong> User selects a JSON file (e.g. <code>mic_sensitivity.json</code>)</li>
+  <li><strong>Step 3 — Apply Settings:</strong> Each JSON key is translated to a SCPI command and sent to the UPV
+    <ul>
+      <li><code>"Start": "100 Hz"</code> becomes <code>SOUR:SWE:FREQ:STAR 100 Hz</code></li>
+      <li><code>"Function Generator": "SIN"</code> becomes <code>SOUR:FUNC SIN</code></li>
+    </ul>
+  </li>
+  <li><strong>Step 4 — Start Sweep:</strong> Background thread fetches live data → plots update in real-time</li>
+  <li><strong>Step 5 — Export:</strong> Data saved as .hxml file containing frequency points + measured levels</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2>6. Key Features</h2>
+<ul>
+  <li><strong>Automatic instrument discovery</strong> — no need to manually type IP addresses</li>
+  <li><strong>Preset-based configuration</strong> — each test type is a simple JSON file, easy to create and share</li>
+  <li><strong>Live sweep visualisation</strong> — frequency response curve draws in real-time during measurement</li>
+  <li><strong>Multi-preset sequencing</strong> — tick multiple presets, reorder them, run all with one click</li>
+  <li><strong>Unit conversion in the GUI</strong> — switch between V, mV, μV, dBV, dBu, dBm on the fly</li>
+  <li><strong>Snapshot readback</strong> — capture the current instrument state as a JSON file for reference</li>
+  <li><strong>Standalone .exe</strong> — packaged with PyInstaller, runs on any Windows PC without setup</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2>7. Measurement Presets Available</h2>
+<ul>
+  <li><strong>mic_sensitivity.json</strong> — Standard microphone sensitivity (100 Hz to 20 kHz, 101 log-spaced points)</li>
+  <li><strong>OSPL90.json</strong> — Output Sound Pressure Level at 90 dB (dB SPL units)</li>
+  <li><strong>COP_Sensitivity.json</strong> — Sensitivity test with 10 Ω output impedance</li>
+  <li><strong>FOGm20.json</strong> — Free-field Open-circuit Gain at −20 dB</li>
+  <li><strong>FOG_Li50.json</strong> — FOG at Li50 condition</li>
+  <li><strong>sweep12k.json</strong> — Single-frequency test at 12 kHz (calibration/verification)</li>
+  <li><strong>1k@70k.json</strong> — 1 kHz tone with 70 kHz bandwidth</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2>8. Output Format (.hxml)</h2>
+<ul>
+  <li>XML-based file format used by acoustic analysis tools</li>
+  <li>Contains <strong>two data arrays</strong>:
+    <ul>
+      <li>Frequency points in Hz (e.g. 100, 105, 111, ... 20000)</li>
+      <li>Corresponding level values in the configured unit (dBV, dBr, dB SPL, etc.)</li>
+    </ul>
+  </li>
+  <li>Includes metadata: <strong>measurement date, equipment ID, tester name, preset name</strong></li>
+  <li>Multiple measurements can be <strong>combined into a single .hxml</strong> after a sequence</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2>9. Technical Challenges &amp; Solutions</h2>
+<ul>
+  <li><strong>Challenge:</strong> GUI freezes while waiting for instrument responses
+    <ul>
+      <li><strong>Solution:</strong> Background acquisition thread + thread-safe queue (producer-consumer pattern)</li>
+    </ul>
+  </li>
+  <li><strong>Challenge:</strong> Concurrent VISA access causes communication errors
+    <ul>
+      <li><strong>Solution:</strong> Mutex lock (<code>threading.Lock</code>) around all instrument queries</li>
+    </ul>
+  </li>
+  <li><strong>Challenge:</strong> Inconsistent unit formatting across presets and snapshots
+    <ul>
+      <li><strong>Solution:</strong> Automatic normalization layer (e.g. "PCT" → "%", "DBV" → "dBV", "uV" → "μV")</li>
+    </ul>
+  </li>
+  <li><strong>Challenge:</strong> Application must work on lab PCs without Python installed
+    <ul>
+      <li><strong>Solution:</strong> PyInstaller bundles everything into a standalone .exe</li>
+    </ul>
+  </li>
+  <li><strong>Challenge:</strong> Instrument may disconnect mid-measurement
+    <ul>
+      <li><strong>Solution:</strong> Timeout-guarded queries, graceful error handling, crash logging to file</li>
+    </ul>
+  </li>
+</ul>
+
+<!-- ============================================================ -->
+<h2>10. Technologies Used</h2>
+<ul>
+  <li><strong>Python 3</strong> — main programming language</li>
+  <li><strong>Tkinter</strong> — GUI framework (built into Python, no extra install)</li>
+  <li><strong>PyVISA</strong> — VISA library for SCPI instrument communication over LAN/USB</li>
+  <li><strong>Matplotlib</strong> — real-time plotting of frequency response curves</li>
+  <li><strong>NumPy</strong> — numerical data array handling</li>
+  <li><strong>PyInstaller</strong> — packaging into standalone Windows executable</li>
+  <li><strong>JSON</strong> — preset configuration file format</li>
+  <li><strong>SCPI</strong> — Standard Commands for Programmable Instruments (industry protocol)</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2>11. Project Structure</h2>
+<ul>
+  <li><strong><code>mic-sensitivity-gui/src/</code></strong> — all application source code
+    <ul>
+      <li><code>main.py</code> — entry point</li>
+      <li><code>gui/window.py</code> — main GUI window (~4000 lines)</li>
+      <li><code>gui/display_map.py</code> — SCPI code ↔ label mappings</li>
+      <li><code>upv/upv_auto_config.py</code> — instrument driver &amp; data export</li>
+      <li><code>upv/upv_readback.py</code> — instrument state readback</li>
+      <li><code>utils/paths.py</code> — path resolution (dev vs. packaged)</li>
+    </ul>
+  </li>
+  <li><strong><code>*.json</code> files</strong> — measurement preset configurations</li>
+  <li><strong><code>Results/</code></strong> — exported .hxml measurement files (output artifacts)</li>
+  <li><strong><code>build/</code></strong> — PyInstaller build output</li>
+  <li><strong><code>main script/</code></strong> — original command-line version (before GUI was developed)</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2>12. Summary / Conclusion</h2>
+<ul>
+  <li>Developed a <strong>complete automation tool</strong> for the R&amp;S UPV Audio Analyzer</li>
+  <li>Reduces measurement setup time from <strong>minutes of manual entry to a single click</strong></li>
+  <li>Supports <strong>multiple standardised test types</strong> through a preset system</li>
+  <li>Provides <strong>real-time visual feedback</strong> during measurements</li>
+  <li>Exports results in a <strong>standardised .hxml format</strong> for downstream analysis</li>
+  <li>Handles <strong>concurrency, error recovery, and unit normalization</strong> robustly</li>
+  <li>Packaged as a <strong>standalone executable</strong> for easy deployment in the lab</li>
+</ul>
+
+<hr>
+<p style="color: #718096; font-size: 0.85em;">Presentation notes — Microphone Sensitivity GUI project</p>
+
+</body>
+</html>
