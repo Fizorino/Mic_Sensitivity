@@ -1,15 +1,18 @@
-# Removed unused import 'label' from cProfile for cleanup
-import pyvisa
+import datetime
 import json
 import math
+import queue
+import re
 import threading
-import time  # added for non-blocking sweep polling
-import queue  # NEW: for decoupling acquisition from GUI
+import time
+import tkinter as tk
 from pathlib import Path
-import sys
-from tkinter import Tk, Frame, Button, Label, filedialog, messagebox, Canvas, Scrollbar, Toplevel, BooleanVar
-from upv.upv_auto_config import find_upv_ip, apply_grouped_settings, load_config, save_config, fetch_and_plot_trace
+from tkinter import Frame, Button, Label, filedialog, messagebox, Canvas, Scrollbar, Toplevel, BooleanVar, Listbox
 from tkinter import ttk, Entry
+
+import pyvisa
+
+from upv.upv_auto_config import find_upv_ip, apply_grouped_settings, load_config, fetch_and_plot_trace
 from gui.display_map import (
     INSTRUMENT_GENERATOR_OPTIONS,
     CHANNEL_GENERATOR_OPTIONS,
@@ -38,7 +41,7 @@ class MainWindow(Frame):
         self.run_upv_callback = run_upv_callback
         self.master = master
         self.master.title("UPV GUI")
-        self.master.geometry("1180x680")  # Slightly tighter default height
+        self.master.geometry("1180x680")
         self.master.configure(bg="#f5f6f8")
         self._apply_theme()
 
@@ -72,19 +75,17 @@ class MainWindow(Frame):
         btn3.grid(row=0, column=0, padx=(0, 8), pady=0)
         btn4.grid(row=0, column=1, padx=(0, 0), pady=0)
 
-        # Tracking for multi-selection presets (define BEFORE building inline selector)
+        # Measurement sequence tracking
         self._measurement_vars = {}
-        self._measurement_selection_order = []  # ordered paths as user ticks
+        self._measurement_selection_order = []
         self._sequence_active = False
         self._sequence_presets = []
         self._sequence_index = -1
-        self._sequence_collected_traces = []  # Collected traces during sequence
-        self._excluded_selected_paths = set()  # Items removed from execution order but still ticked
-        self._measurement_row_frames = {}  # map Path -> row frame for scrolling
-        self._measurement_canvas = None  # store canvas to enable scroll-to-row
-        # Root directory for discovering measurement preset JSON files (user-changeable)
+        self._sequence_collected_traces = []
+        self._excluded_selected_paths = set()
+        self._measurement_row_frames = {}
+        self._measurement_canvas = None
         self._measurement_dir = Path(SETTINGS_FILE).parent
-        # Drag-and-drop reorder removed; rely on Up/Down buttons only
 
         # Inline multi-measurement selection panel (checkboxes beside buttons)
         self.inline_measure_container = Frame(self.top_frame, bg="#f5f6f8")
@@ -94,11 +95,10 @@ class MainWindow(Frame):
         btn5 = Button(self.left_frame, text="Start Sweep", command=self.start_sweep, width=btn_width)
         btn5.pack(pady=(6,4))
         self.start_sweep_btn = btn5
-        # Require Apply Settings before allowing sweep start
+        # Sweep state
         self._settings_applied = False
         self.start_sweep_btn.config(state="disabled")
 
-        # Stop button for continuous sweep (disabled until a continuous sweep is started)
         self.stop_sweep_btn = Button(
             self.left_frame,
             text="Stop Continuous",
@@ -108,22 +108,13 @@ class MainWindow(Frame):
         )
         self.stop_sweep_btn.pack(pady=(0,4))
 
-        # Internal state tracking for continuous sweep
         self._continuous_active = False
-        # Track if a single (non-continuous) sweep is currently running so we can live-update
         self._single_sweep_in_progress = False
-        # Track currently loaded preset base name for export working title (default active at startup)
         self._current_preset_name = DEFAULT_PRESET_NAME
-        # Legacy popup selector attributes retained for compatibility
-        self._measurement_selector_win = None
-        self._multi_selected_files = []
-        self._merged_measurement_settings = None
 
         # Snapshot (read-back) button
         btn_snapshot = Button(self.left_frame, text="Snapshot Settings", command=self.snapshot_upv, width=btn_width)
         btn_snapshot.pack(pady=(0,6))
-
-        # Removed legacy Show Sweep Display button (direct trace popup)
 
         # Right spacer
         self.right_spacer = Frame(self.top_frame)
@@ -131,17 +122,16 @@ class MainWindow(Frame):
 
         self.status_label = Label(self.left_frame, text="", fg="green", bg="#f5f6f8")
         self.status_label.pack(pady=(4,6))
-        # Display currently loaded preset (default on startup)
         self.preset_label = Label(self.left_frame, text=f"Preset: {self._current_preset_name}", fg="#555555", bg="#f5f6f8")
         self.preset_label.pack(pady=(0,10))
-        # Backend-defined fixed Y-axis (user not editing in GUI): defaults 30 to 100
+
+        # Fixed axis limits (auto-expand if data exceeds bounds)
         self._fixed_y_min = 30.0
         self._fixed_y_max = 100.0
-        # Backend-defined fixed X-axis (frequency) with auto expansion if data exceeds bounds
         self._fixed_x_min = 100.0
         self._fixed_x_max = 20000.0
 
-        # 2x2 grid container for four independently scrollable panels
+        # 2x2 grid for four scrollable settings panels
         self.grid_frame = Frame(self.master, bg="#f5f6f8")
         self.grid_frame.pack(side="top", expand=True, fill="both")
         for r in range(2):
@@ -149,48 +139,32 @@ class MainWindow(Frame):
         for c in range(2):
             self.grid_frame.grid_columnconfigure(c, weight=1)
 
-        # Placeholder so older methods referencing self.canvas don't break; each panel has its own canvas
-        self.canvas = None
-        self.log_text = None
-        self.log_file = None
-        self.enable_logging = False
-
         # Global scroll management
-        self.active_scroll_canvas = None  # Canvas currently under mouse
-        self._suspend_global_scroll = False  # Temporarily disable (e.g., when over combobox)
-        # Bind a single global mouse wheel handler (Windows uses <MouseWheel>)
+        self.active_scroll_canvas = None
         self.master.bind_all("<MouseWheel>", self._on_global_mousewheel, add="+")
-        # Optional: Linux (ignored on Windows but harmless)
         self.master.bind_all("<Button-4>", self._on_button4, add="+")
         self.master.bind_all("<Button-5>", self._on_button5, add="+")
 
         self.entries = {}
         self.load_settings()
         self.upv = None
-        # Ensure initial state
         self._refresh_start_sweep_state()
-        # Connection state helpers
+
+        # Connection state
         self._connecting = False
         self._scan_anim_phase = 0
-        # Cached display frequency limits (fmin, fmax) from instrument display (DISP:SWE:A:BOTT?/TOP?)
-        self._display_freq_limits = None  # (fmin, fmax)
-        self._display_amp_limits = None   # (amin, amax) from DISP:SWE:A:BOTT?/TOP?
-        # Simple counter to throttle SCPI queries for display limits during live polling
-        self._display_axis_query_counter = 0
-        # Persistently locked Y-limits (once fetched from instrument) so plot does not rescale
-        self._locked_y_limits = None
+
         # Thread-safe VISA access & background acquisition pipeline
         self._visa_lock = threading.Lock()
-        self._data_queue = queue.Queue(maxsize=2)  # keep freshest sample pairs only
+        self._data_queue = queue.Queue(maxsize=2)
         self._acq_thread = None
         self._acq_stop_event = threading.Event()
         self._acq_fail_count = 0
         self._live_consumer_started = False
-        # Multi-window live sweep support (one plot per preset in a sequence)
+
+        # Multi-window live sweep support
         self._live_windows = []
         self._force_new_live_window = False
-        # After a sequence completes, require user to press 'Apply Selected' again
-        # before enabling Start Sweep (locks previous settings).
         self._sequence_completed_lock = False
 
     # ---------------- Safe VISA Helpers -----------------
@@ -246,12 +220,10 @@ class MainWindow(Frame):
         Returns sanitized display string.
         """
         try:
-            import json as _json
-            from pathlib import Path as _Path
-            if not _Path(SETTINGS_FILE).exists():
+            if not Path(SETTINGS_FILE).exists():
                 return 'dBV'
             with open(SETTINGS_FILE, 'r', encoding='utf-8') as sf:
-                data = _json.load(sf)
+                data = json.load(sf)
             user_unit_raw = data.get('SENS:USER')
             std_unit_raw = data.get('SENS:UNIT') or data.get('SENS1:UNIT')
 
@@ -285,37 +257,21 @@ class MainWindow(Frame):
             pass
         return 'dBV'
 
-    # Removed deprecated _freeze_axis_limits (previously no-op)
-
-    # New helper now locking Y-axis strictly to instrument limits once acquired.
-    def _apply_fixed_freq_and_auto_level(self, ax, x_vals, y_vals):  # keeping name for compatibility
-        """Apply fixed X (100–12k Hz) and lock Y to instrument limits ONLY when they become non-trivial.
-
-        Rules:
-          1. Query DISP:SWE:A:BOTT?/TOP? each call until a NON-TRIVIAL span is found.
-             A span is considered trivial if:
-                - (amin, amax) == (0, 1) OR
-                - amax - amin < 0.5 (very small) OR
-                - amin == amax
-          2. Before lock is established, fall back to data-driven autoscale (with 5% padding) so the user sees data.
-          3. Once a valid span is acquired it is frozen in self._locked_y_limits and reused thereafter.
-          4. If no data yet and no valid span, show provisional (0,1) once (avoid flicker) until something better arrives.
-        """
+    def _apply_fixed_freq_and_auto_level(self, ax, x_vals, y_vals):
+        """Apply fixed X-axis and Y-axis limits with auto-expansion if data exceeds bounds."""
         try:
             # Auto-expand X-axis if incoming data exceeds current fixed bounds.
             try:
                 if x_vals:
                     local_x_min = min(x_vals)
                     local_x_max = max(x_vals)
-                    # Extend lower bound if necessary (add 5% span headroom or at least -1)
                     if local_x_min < self._fixed_x_min:
                         span = self._fixed_x_max - self._fixed_x_min if self._fixed_x_max > self._fixed_x_min else 1.0
                         headroom = span * 0.05
                         new_min = local_x_min - headroom
-                        if new_min > self._fixed_x_min:  # headroom too small fallback
+                        if new_min > self._fixed_x_min:
                             new_min = local_x_min - 1.0
                         self._fixed_x_min = new_min
-                    # Extend upper bound if necessary (5% headroom or +1)
                     if local_x_max > self._fixed_x_max:
                         span = self._fixed_x_max - self._fixed_x_min if self._fixed_x_max > self._fixed_x_min else local_x_max
                         headroom = span * 0.05
@@ -330,7 +286,6 @@ class MainWindow(Frame):
             # Apply backend fixed Y-axis limits with auto upward extension if data exceeds current max.
             try:
                 if y_vals:
-                    # If any value exceeds current max, extend with 5% headroom (do not shrink later).
                     local_max = max(y_vals)
                     if local_max > self._fixed_y_max:
                         span_y = self._fixed_y_max - self._fixed_y_min if self._fixed_y_max > self._fixed_y_min else abs(local_max)
@@ -340,84 +295,6 @@ class MainWindow(Frame):
                             new_y_max = local_max + 1.0
                         self._fixed_y_max = new_y_max
                 ax.set_ylim(self._fixed_y_min, self._fixed_y_max)
-            except Exception:
-                pass
-            return
-
-            have_data = bool(x_vals) and bool(y_vals)
-
-            # If already locked, just apply and exit
-            if self._locked_y_limits is not None:
-                try:
-                    ax.set_ylim(*self._locked_y_limits)
-                except Exception:
-                    pass
-                return
-
-            # Attempt to read instrument limits
-            inst_limits = None
-            if self.upv is not None:
-                try:
-                    amin_q = float(self.upv.query("DISP:SWE:A:BOTT?").strip())
-                    amax_q = float(self.upv.query("DISP:SWE:A:TOP?").strip())
-                    if amax_q > amin_q:
-                        inst_limits = (amin_q, amax_q)
-                        self._display_amp_limits = inst_limits
-                except Exception:
-                    inst_limits = self._display_amp_limits  # cached (may be None)
-            else:
-                inst_limits = self._display_amp_limits
-
-            locked_this_call = False
-            if inst_limits is not None:
-                amin, amax = inst_limits
-                span = amax - amin
-                trivial = (
-                    (abs(amin) < 1e-9 and abs(amax - 1.0) < 1e-9) or  # exactly 0..1
-                    span < 0.5 or
-                    amax <= amin
-                )
-                if not trivial:
-                    # Lock now
-                    self._locked_y_limits = inst_limits
-                    locked_this_call = True
-
-            if self._locked_y_limits is not None:
-                # Apply locked (either from this call or previously)
-                try:
-                    ax.set_ylim(*self._locked_y_limits)
-                except Exception:
-                    pass
-                # Optional: surface once that we locked
-                if locked_this_call:
-                    try:
-                        self.update_status(f"Y locked: {self._locked_y_limits[0]:.2f}..{self._locked_y_limits[1]:.2f}")
-                    except Exception:
-                        pass
-                return
-
-            # Not locked yet -> fallback to data autoscale so user sees something meaningful
-            if have_data:
-                ys_window = [y for x, y in zip(x_vals, y_vals) if FMIN <= x <= FMAX]
-                if not ys_window:
-                    ys_window = y_vals
-                try:
-                    dmin = min(ys_window)
-                    dmax = max(ys_window)
-                    if dmax == dmin:
-                        dmin -= 0.1
-                        dmax += 0.1
-                    span = dmax - dmin
-                    pad = span * 0.05 if span > 0 else 0.5
-                    ymin = dmin - pad
-                    ymax = dmax + pad
-                except Exception:
-                    ymin, ymax = 0.0, 1.0
-            else:
-                ymin, ymax = 0.0, 1.0
-
-            try:
-                ax.set_ylim(ymin, ymax)
             except Exception:
                 pass
         except Exception:
@@ -494,8 +371,6 @@ class MainWindow(Frame):
                 settings = json.load(f)
 
             # --- Normalization: convert legacy/snapshot unit variants to canonical display ---
-            # Handles: PCT -> %, DBV/DBU/DBM case, HZ/KHZ casing, OHM/KOHM/Ω, time units, micro volts (uV/UV -> μV)
-            import re
             def _normalize_value(val: str) -> str:
                 original = val
                 s = val.strip()
@@ -570,8 +445,6 @@ class MainWindow(Frame):
                             json.dump(settings, wf, indent=2, ensure_ascii=False)
                     except Exception:
                         pass
-                    # Expose count for diagnostics (optional)
-                    self._last_normalization_change_count = len(normalization_changes)
             except Exception:
                 pass
 
@@ -724,7 +597,6 @@ class MainWindow(Frame):
                         elif section == "Generator Config" and label == "Common (Float/Ground)":
                             # Use Radiobuttons for GRO/FLO
                             from gui.display_map import COMMON_OPTIONS
-                            import tkinter as tk
                             self.common_var = tk.StringVar()
                             self.common_var.set(value if value in COMMON_OPTIONS else "GRO")
                             radio_frame = Frame(frame)
@@ -746,7 +618,6 @@ class MainWindow(Frame):
                                                entry_key=("Generator Config", label))
                         elif section == "Generator Config" and label == "Volt Range (Auto/Fix)":
                             from gui.display_map import VOLT_RANGE_OPTIONS
-                            import tkinter as tk
                             self.volt_range_var = tk.StringVar()
                             self.volt_range_var.set(value if value in VOLT_RANGE_OPTIONS else "AUTO")
                             radio_frame = Frame(frame)
@@ -757,7 +628,6 @@ class MainWindow(Frame):
                             self.entries[("Generator Config", label)] = self.volt_range_var
                         elif section == "Generator Config" and label == "Max Voltage":
                             # Split value and unit if possible (case-insensitive, normalize dB units)
-                            import re
                             unit_options = ["V", "mV", "μV", "dBV", "dBu", "dBm"]
                             val_str = str(value)
                             match = re.match(r"^([\-\d\.]+)\s*([a-zA-Zμ]+)?$", val_str)
@@ -786,7 +656,6 @@ class MainWindow(Frame):
                             combo = ttk.Combobox(hv_frame, values=unit_options, width=6, state="readonly")
                             combo.set(unit_part)
                             combo.pack(side="left")
-                            import math
                             def convert_voltage_unit(event=None, entry=entry, combo=combo):
                                 try:
                                     val = float(entry.get())
@@ -835,7 +704,6 @@ class MainWindow(Frame):
                             self.entries[(section, label)] = (entry, combo)
                         elif section == "Generator Config" and label == "Ref Voltage":
                             # Same as Max Voltage: value + unit (case-insensitive)
-                            import re
                             unit_options = ["V", "mV", "μV", "dBV", "dBu", "dBm"]
                             val_str = str(value)
                             match = re.match(r"^([\-\d\.]+)\s*([a-zA-Zμ]+)?$", val_str)
@@ -863,7 +731,6 @@ class MainWindow(Frame):
                             combo = ttk.Combobox(hv_frame, values=unit_options, width=6, state="readonly")
                             combo.set(unit_part)
                             combo.pack(side="left")
-                            import math
                             def convert_voltage_unit(event=None, entry=entry, combo=combo):
                                 try:
                                     val = float(entry.get())
@@ -910,7 +777,6 @@ class MainWindow(Frame):
                             self.entries[(section, label)] = (entry, combo)
                         elif section == "Generator Config" and label == "Ref Frequency":
                             # Value + unit, only Hz and kHz
-                            import re
                             unit_options = ["Hz", "kHz"]
                             val_str = str(value)
                             match = re.match(r"^([\-\d\.]+)\s*([a-zA-Z]+)?$", val_str)
@@ -948,7 +814,6 @@ class MainWindow(Frame):
                             self.bind_combobox_mousewheel(combo)
                             self.entries[(section, label)] = (entry, combo)
                         elif label == "Low Dist":
-                            import tkinter as tk
                             var = tk.StringVar()
                             var.set("ON" if str(value).upper() == "ON" else "OFF")
                             cb = tk.Checkbutton(frame, variable=var, onvalue="ON", offvalue="OFF")
@@ -975,7 +840,6 @@ class MainWindow(Frame):
                             # We'll bind visibility update after building all rows
                         elif section == "Generator Function" and label == "Frequency":
                             # Value + unit (Hz / kHz)
-                            import re
                             unit_options = ["Hz", "kHz"]
                             val_str = str(value)
                             match = re.match(r"^([\-\d\.]+)\s*([a-zA-Z]+)?$", val_str)
@@ -1061,7 +925,6 @@ class MainWindow(Frame):
                             if section == "Generator Function":
                                 self._gen_func_widgets.setdefault(label, []).append(self.entries[(section, label)])
                         elif section == "Generator Function" and label in ("Start", "Stop"):
-                            import re
                             unit_options = ["Hz", "kHz"]
                             val_str = str(value)
                             match = re.match(r"^([\-\d\.]+)\s*([a-zA-Z]+)?$", val_str)
@@ -1102,7 +965,6 @@ class MainWindow(Frame):
                                 self._gen_func_widgets.setdefault(label, []).append(hv_frame)
                         elif section == "Generator Function" and label == "Voltage":
                             # Same as Max Voltage: value + unit (case-insensitive, ensure DBR -> dBr)
-                            import re
                             unit_options = ["V", "mV", "μV", "dBV", "dBu", "dBm", "dBr"]
                             val_str = str(value)
                             match = re.match(r"^([\-\d\.]+)\s*([a-zA-Zμ]+)?$", val_str)
@@ -1130,7 +992,6 @@ class MainWindow(Frame):
                             combo = ttk.Combobox(hv_frame, values=unit_options, width=6, state="readonly")
                             combo.set(unit_part)
                             combo.pack(side="left")
-                            import math
 
                             def get_ref_voltage_volts():
                                 # Fetch the Ref Voltage entry and combo from self.entries
@@ -1241,7 +1102,6 @@ class MainWindow(Frame):
                             if section == "Generator Function":
                                 self._gen_func_widgets.setdefault(label, []).append(combo)
                         elif section == "Generator Function" and label == "Equalizer":
-                            import tkinter as tk
                             var = tk.StringVar()
                             var.set("ON" if str(value).upper() == "ON" else "OFF")
                             cb = tk.Checkbutton(frame, variable=var, onvalue="ON", offvalue="OFF")
@@ -1252,7 +1112,6 @@ class MainWindow(Frame):
                                 cb.deselect()
                             self.entries[(section, label)] = var
                         elif section == "Generator Function" and label == "DC Offset":
-                            import tkinter as tk
                             var = tk.StringVar()
                             var.set("ON" if str(value).upper() == "ON" else "OFF")
                             cb = tk.Checkbutton(frame, variable=var, onvalue="ON", offvalue="OFF")
@@ -1278,7 +1137,6 @@ class MainWindow(Frame):
                                                entry_key=(section, label))
                         elif section == "Analyzer Config" and label == "CH1 Coupling":
                             from gui.display_map import CH1_COUPLING_OPTIONS
-                            import tkinter as tk
                             ch1_coupling_var = tk.StringVar()
                             ch1_coupling_var.set(value if value in CH1_COUPLING_OPTIONS else "AC")
                             radio_frame = Frame(frame)
@@ -1318,7 +1176,6 @@ class MainWindow(Frame):
                                                entry_key=(section, label))
                         elif section == "Analyzer Config" and label == "CH1 Ground/Common":
                             from gui.display_map import CH1_COMMON_OPTIONS
-                            import tkinter as tk
                             ch1_common_var = tk.StringVar()
                             ch1_common_var.set(value if value in CH1_COMMON_OPTIONS else "FLOat")
                             radio_frame = Frame(frame)
@@ -1335,8 +1192,6 @@ class MainWindow(Frame):
                                                grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
                                                entry_key=(section, label))
                         elif section == "Analyzer Config" and label == "Ref Imped":
-                            import tkinter as tk
-                            import re
                             hv_frame = Frame(frame)
                             hv_frame.grid(row=i, column=1, sticky="w", pady=2)
                             entry = Entry(hv_frame, width=22)
@@ -1389,8 +1244,6 @@ class MainWindow(Frame):
                                                grid_kwargs={"row": i, "column": 1, "sticky": "w", "pady": 2},
                                                entry_key=(section, label))
                         elif section == "Analyzer Config" and label == "Delay":
-                            import tkinter as tk
-                            import re
                             delay_frame = Frame(frame)
                             delay_frame.grid(row=i, column=1, sticky="w", pady=2)
                             entry = Entry(delay_frame, width=22)
@@ -1462,7 +1315,6 @@ class MainWindow(Frame):
                             # Initialize storage for analyzer function rows we may hide dynamically
                             self._an_func_hidden_rows = getattr(self, '_an_func_hidden_rows', {})
                         elif section == "Analyzer Function" and label == "S/N Sequence":
-                            import tkinter as tk
                             var = tk.BooleanVar()
                             var.set(str(value).upper() == "ON")
                             chk = tk.Checkbutton(frame, variable=var)
@@ -1564,8 +1416,6 @@ class MainWindow(Frame):
                             except Exception:
                                 pass
                         elif section == "Analyzer Function" and label == "Tolerance":
-                            import tkinter as tk
-                            import re
                             tol_frame = Frame(frame)
                             tol_frame.grid(row=i, column=1, sticky="w", pady=2)
                             entry = Entry(tol_frame, width=22)
@@ -1616,8 +1466,6 @@ class MainWindow(Frame):
                             self.entries[(section, label)] = (entry, combo)
                         elif section == "Analyzer Function" and label == "Factor":
                             # Simple numeric factor with a trailing '*' unit indicator
-                            import tkinter as tk
-                            import re
                             fac_frame = Frame(frame)
                             fac_frame.grid(row=i, column=1, sticky="w", pady=2)
                             entry = Entry(fac_frame, width=22)
@@ -1643,9 +1491,6 @@ class MainWindow(Frame):
                             except Exception:
                                 pass
                         elif section == "Analyzer Function" and label == "Resolution":
-                            import tkinter as tk
-                            import re
-                            import math
                             res_frame = Frame(frame)
                             res_frame.grid(row=i, column=1, sticky="w", pady=2)
                             entry = Entry(res_frame, width=22)
@@ -1745,8 +1590,6 @@ class MainWindow(Frame):
                             self.bind_combobox_mousewheel(combo)
                             self.entries[(section, label)] = (entry, combo)
                         elif section == "Analyzer Function" and label == "Timeout":
-                            import tkinter as tk
-                            import re
                             timeout_frame = Frame(frame)
                             timeout_frame.grid(row=i, column=1, sticky="w", pady=2)
                             entry = Entry(timeout_frame, width=22)
@@ -1793,14 +1636,12 @@ class MainWindow(Frame):
                             self.bind_combobox_mousewheel(combo)
                             self.entries[(section, label)] = (entry, combo)
                         elif section == "Analyzer Function" and label == "Bargraph":
-                            import tkinter as tk
                             var = tk.BooleanVar()
                             var.set(str(value).upper() == "ON")
                             chk = tk.Checkbutton(frame, variable=var)
                             chk.grid(row=i, column=1, sticky="w", pady=2)
                             self.entries[(section, label)] = var
                         elif section == "Analyzer Function" and label == "POST FFT":
-                            import tkinter as tk
                             var = tk.BooleanVar()
                             var.set(str(value).upper() == "ON")
                             chk = tk.Checkbutton(frame, variable=var)
@@ -1863,7 +1704,6 @@ class MainWindow(Frame):
                             except Exception:
                                 pass
                         elif section == "Analyzer Function" and label == "Waveform":
-                            import tkinter as tk
                             var = tk.BooleanVar()
                             var.set(str(value).upper() == "ON")
                             chk = tk.Checkbutton(frame, variable=var)
@@ -2001,7 +1841,6 @@ class MainWindow(Frame):
           - Entry widgets (direct or inside tuples)
           - tk.StringVar / tk.BooleanVar variables (checkboxes, radio groups)
         """
-        import tkinter as tk
         # Prevent duplicate attachment within same settings load (optional)
         if getattr(self, '_mod_watchers_attached', False):
             return
@@ -2032,21 +1871,6 @@ class MainWindow(Frame):
             except Exception:
                 pass
         self._mod_watchers_attached = True
-
-    def save_settings(self):
-        try:
-            with open(SETTINGS_FILE, "r") as f:
-                settings = json.load(f)
-            for (section, label), entry in self.entries.items():
-                if section in settings and label in settings[section]:
-                    settings[section][label] = entry.get()
-            with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-                json.dump(settings, f, indent=2, ensure_ascii=False)
-            self.status_label.config(text="Settings saved successfully.", fg="green")
-        except Exception as e:
-            messagebox.showerror("Save Error", f"Could not save settings: {e}")
-
-    # Removed synchronous connect_to_upv; asynchronous version retained later for better UX
 
     def apply_settings(self):
         try:
@@ -2329,7 +2153,6 @@ class MainWindow(Frame):
 
                 elif section == "Analyzer Function" and label == "Factor":
                     # Simple numeric field, store raw string (trimmed)
-                    import re
                     val = widget.get().strip()
                     # Extract numeric portion only
                     num_match = re.match(r"^[\s]*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)", val)
@@ -2690,11 +2513,6 @@ class MainWindow(Frame):
                 except Exception:
                     pass
                 self._refresh_start_sweep_state()
-            # Terminate any live update loop
-            try:
-                self._live_sweep_running = False
-            except Exception:
-                pass
             self.update_status("✅ Continuous sweep stopped.")
             if not silent:
                 # No automatic fetch or dialog per user request; simply end silently with status label update
@@ -2804,14 +2622,11 @@ class MainWindow(Frame):
             self.update_status("Snapshot failed", color="red")
             messagebox.showerror("Snapshot Error", f"Failed to create snapshot: {e}")
 
-    # (Legacy show_sweep_display removed)
-
     # ---------------- Live Sweep Display (Auto Refresh) -----------------
     def _init_live_sweep_display(self):
         """Setup (or reuse) live sweep window and start background acquisition & GUI consumer."""
         if self.upv is None:
             return
-        import tkinter as _tk
         from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
         from matplotlib.figure import Figure
         # Decide whether to create a new window (sequence wants a fresh window per preset)
@@ -2819,7 +2634,7 @@ class MainWindow(Frame):
         create_new = force_new or not hasattr(self, '_sweep_plot_win') or self._sweep_plot_win is None or not self._sweep_plot_win.winfo_exists()
         if create_new:
             try:
-                win = _tk.Toplevel(self.master)
+                win = Toplevel(self.master)
                 win.title("Live Sweep")
                 win.geometry("700x450")
                 fig = Figure(figsize=(7, 4.2), dpi=100)
@@ -3078,39 +2893,24 @@ class MainWindow(Frame):
         self.active_scroll_canvas = canvas
 
     def _on_global_mousewheel(self, event):
-        if self._suspend_global_scroll:
-            return
         if self.active_scroll_canvas is not None:
             delta = event.delta
-            # Windows gives multiples of 120
-            steps = int(-delta/120) if delta != 0 else 0
+            steps = int(-delta / 120) if delta != 0 else 0
             if steps != 0:
                 self.active_scroll_canvas.yview_scroll(steps, 'units')
 
-    def _on_button4(self, event):  # Linux scroll up
-        if self._suspend_global_scroll:
-            return
+    def _on_button4(self, event):
         if self.active_scroll_canvas is not None:
             self.active_scroll_canvas.yview_scroll(-1, 'units')
 
-    def _on_button5(self, event):  # Linux scroll down
-        if self._suspend_global_scroll:
-            return
+    def _on_button5(self, event):
         if self.active_scroll_canvas is not None:
             self.active_scroll_canvas.yview_scroll(1, 'units')
 
     def bind_combobox_mousewheel(self, combo):
-        """Allow scrolling the parent panel even while mouse is over a readonly Combobox.
-
-        Previous implementation suspended global scroll to avoid accidental panel movement while
-        the user intended to use the combobox. However, since all comboboxes are readonly and we
-        also block their own default mousewheel behavior, it's more user-friendly to keep panel
-        scrolling active. We intercept the wheel event, manually scroll the active canvas, then
-        return 'break' so the combobox selection doesn't change.
-        """
+        """Intercept wheel events on readonly comboboxes to scroll the parent panel instead."""
 
         def on_mousewheel(event):
-            # Ensure we have an active canvas (should be set when entering panel/inner frame)
             if self.active_scroll_canvas is not None:
                 delta = event.delta
                 steps = int(-delta/120) if delta != 0 else 0
@@ -3217,10 +3017,6 @@ class MainWindow(Frame):
                             w.grid_remove()
                 except Exception:
                     continue
-
-    def _update_sn_sequence_visibility(self):
-        # Backwards compatibility: delegate to unified analyzer function visibility handler
-        self._update_analyzer_function_visibility()
 
     def _update_analyzer_function_visibility(self):
         """Unified visibility control for Analyzer Function dependent rows.
@@ -3454,10 +3250,6 @@ class MainWindow(Frame):
                 continue
 
     def save_preset(self):
-        import json
-        from tkinter import filedialog, messagebox
-
-        # Ask user where to save the preset
         preset_path = filedialog.asksaveasfilename(
             defaultextension=".json",
             filetypes=[("JSON files", "*.json")],
@@ -3487,11 +3279,6 @@ class MainWindow(Frame):
         )
     
     def load_preset(self):
-        import json
-        from tkinter import filedialog, messagebox
-        from pathlib import Path as _Path
-
-        # Ask user to select a preset file
         preset_path = filedialog.askopenfilename(
             defaultextension=".json",
             filetypes=[("JSON files", "*.json")],
@@ -3513,7 +3300,7 @@ class MainWindow(Frame):
             self.load_settings()
             # Record preset base name for future exports (WorkingTitle / CurveDataName), but allow default to override
             try:
-                stem = _Path(preset_path).stem
+                stem = Path(preset_path).stem
                 if stem.lower() == DEFAULT_PRESET_NAME.lower():
                     self._current_preset_name = DEFAULT_PRESET_NAME
                 else:
@@ -3596,8 +3383,6 @@ class MainWindow(Frame):
         return sorted(files)
 
     def choose_measurement_folder(self):
-        from tkinter import filedialog, messagebox
-        # Let user select the folder that contains preset JSON files
         initial = str(getattr(self, '_measurement_dir', Path(SETTINGS_FILE).parent))
         chosen = filedialog.askdirectory(title="Select preset folder",
                                          initialdir=initial)
@@ -3659,7 +3444,6 @@ class MainWindow(Frame):
         preview_frame = Frame(container, bg="#eef3fb", highlightthickness=1, highlightbackground="#d0d3d6")
         preview_frame.pack(side="left", padx=(10,0), anchor="n")
         Label(preview_frame, text="Selected", font=("Segoe UI", 10, "bold"), bg="#eef3fb", fg="#2c3e50").pack(anchor="w", pady=(0,2))
-        from tkinter import Listbox
         self._selected_preview_listbox = Listbox(preview_frame, height=15, width=22, exportselection=False)
         self._selected_preview_listbox.pack(anchor="w", padx=4, pady=(0,4))
         # Unified preview action panel (grid for neat alignment)
@@ -3877,71 +3661,10 @@ class MainWindow(Frame):
         self._build_inline_measurement_selector()
         self._refresh_selected_preview()
 
-    def open_measurement_selector(self):
-        if self._measurement_selector_win and self._measurement_selector_win.winfo_exists():
-            self._measurement_selector_win.lift()
-            return
-        win = Toplevel(self.master)
-        self._measurement_selector_win = win
-        win.title("Select Measurements")
-        win.geometry("360x480")
-        container = Frame(win)
-        container.pack(fill="both", expand=True, padx=10, pady=10)
-        canvas = Canvas(container)
-        scrollbar = Scrollbar(container, orient="vertical", command=canvas.yview)
-        list_frame = Frame(canvas)
-        list_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0,0), window=list_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        self._measurement_vars.clear()
-        presets = self._list_measurement_presets()
-        if not presets:
-            Label(list_frame, text="No preset JSON files found.").pack(anchor="w", pady=4)
-        for p in presets:
-            var = BooleanVar(value=False)
-            # Trace to record selection order
-            def _mk_handler(path):
-                def _handler(*_args):
-                    try:
-                        if self._measurement_vars[path].get():
-                            if path not in self._measurement_selection_order:
-                                self._measurement_selection_order.append(path)
-                        else:
-                            if path in self._measurement_selection_order:
-                                self._measurement_selection_order.remove(path)
-                        # Invalidate applied settings until Apply Selected pressed
-                        self._sequence_completed_lock = True
-                        self._settings_applied = False
-                        try:
-                            if hasattr(self, 'start_sweep_btn'):
-                                self.start_sweep_btn.config(state='disabled')
-                        except Exception:
-                            pass
-                        self._refresh_start_sweep_state()
-                        try:
-                            self.update_status("Selection changed - press Apply Selected.", color="orange")
-                        except Exception:
-                            pass
-                    except Exception:
-                        pass
-                return _handler
-            var.trace_add('write', _mk_handler(p))
-            cb = ttk.Checkbutton(list_frame, text=p.stem, variable=var)
-            cb.pack(anchor="w", pady=2)
-            self._measurement_vars[p] = var
-        btn_frame = Frame(win)
-        btn_frame.pack(fill="x", pady=8)
-        Button(btn_frame, text="Select All", command=lambda: self._set_all_measurements(True)).pack(side="left", padx=5)
-        Button(btn_frame, text="Clear", command=lambda: self._set_all_measurements(False)).pack(side="left", padx=5)
-        Button(btn_frame, text="Apply Selected", command=self.apply_selected_measurements).pack(side="right", padx=5)
-
     def _set_all_measurements(self, state: bool):
         for var in self._measurement_vars.values():
             var.set(state)
         self._refresh_selected_preview()
-        # Bulk selection change invalidates applied settings/sequence
         self._sequence_completed_lock = True
         self._settings_applied = False
         try:
@@ -3954,14 +3677,6 @@ class MainWindow(Frame):
             self.update_status("Selection changed - press Apply Selected.", color="orange")
         except Exception:
             pass
-
-    def _deep_merge(self, base: dict, other: dict):
-        for k, v in other.items():
-            if k in base and isinstance(base[k], dict) and isinstance(v, dict):
-                self._deep_merge(base[k], v)
-            else:
-                base[k] = v
-        return base
 
     def apply_selected_measurements(self):
         """Start a measurement sequence using the order the user ticked the boxes.
@@ -4118,7 +3833,6 @@ class MainWindow(Frame):
         if not export_path:
             self.update_status("Combined export cancelled.", color="orange")
             return
-        import datetime
         now = datetime.datetime.now().strftime("%d-%b-%Y %H:%M:%S")
         try:
             # Single dataset (WorkingTitle) with multiple curvedata entries like example file
